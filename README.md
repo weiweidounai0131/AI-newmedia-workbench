@@ -1,6 +1,6 @@
-# 电信新媒体工作台（Electron 桌面端）
+# AI新媒体工作台（Electron 桌面端）
 
-广州电信企微新媒体工作台封装工程。设计决策全部收口于 `docs/tech/BACKEND-PATH.md`，本仓库是其工程落地。
+面向个人创作者的新媒体内容工作台封装工程。设计决策全部收口于 `docs/tech/BACKEND-PATH.md`，本仓库是其工程落地。
 
 ## 里程碑进度
 
@@ -78,7 +78,7 @@ curl http://127.0.0.1:8787/api/health
 curl -X POST http://127.0.0.1:8787/api/settings/key \
   -H 'Content-Type: application/json' -d '{"cap":"image","key":"sk-你的AIHubMixKey"}'
 curl -X POST http://127.0.0.1:8787/api/ai/chutu \
-  -H 'Content-Type: application/json' -d '{"prompt":"电信宽带春日促销海报","size":"1024x1536"}'
+  -H 'Content-Type: application/json' -d '{"prompt":"宽带春日促销海报","size":"1024x1536"}'
 ```
 
 ## 如何运行 / 验证 M2 前端

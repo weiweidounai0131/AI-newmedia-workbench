@@ -116,7 +116,7 @@ GET /api/hot?platform=douyin&limit=50
 | 坑 | 说明 |
 |---|---|
 | **技术栈错配** | 它是 Python + Playwright。集成 = 打包 Python 运行时 + 独立 Chromium 内核，安装包粗估 **+230MB**（Electron 壳 ~150MB → 总计 400MB 起）；且 Mac 本机打不出 Windows 的 PyInstaller 产物，CI 复杂度翻倍 |
-| **License 商用限制** | 其协议为自定义的「非商业学习授权」，**明确限制商业用途**。本项目是电信内部生产工具，直接打包其代码存在合规风险。⚠️ **此条需在集成决策前实际拉取其 LICENSE 文件复核** |
+| **License 商用限制** | 其协议为自定义的「非商业学习授权」，**明确限制商业用途**。本项目若用于商业生产，直接打包其代码存在合规风险。⚠️ **此条需在集成决策前实际拉取其 LICENSE 文件复核** |
 | **爬虫天然易腐** | 平台改一次接口/签名，爬虫就要跟一次版本。打包进 app 的版本三个月后可能失效，而终端用户无法自行 `git pull` |
 
 #### 定案方案：Electron 原生抓取
@@ -479,7 +479,7 @@ POST /api/lib/export { folder:'图片', name, payload:b64 }  // 落素材库（�
 
 ### 5.1　方案 C：本地直写为主 + 系统内只存索引
 
-- **导出根目录**：用户首次（或首次点导出）用系统目录选择器（`dialog.showOpenDialog`）选定一个本地根目录（默认建议 `~/Documents/电信新媒体工作台/`），路径**加密存 settings 表**，后续复用。
+- **导出根目录**：用户首次（或首次点导出）用系统目录选择器（`dialog.showOpenDialog`）选定一个本地根目录（默认建议 `~/Documents/AI新媒体工作台/`），路径**加密存 settings 表**，后续复用。
 - **导出动作**：后端 `exporter` 服务生成实体文件后，用 Node `fs` **直接写入** `根目录/选题/`、`根目录/洗稿/`、`根目录/图片/` 三个子文件夹，**不经过下载步骤**。
 - **系统内索引**：SQLite 的 `files` 表**只存元数据**（localPath / folder / name / kind / size / createdAt / 缩略图 dataURL），不存文件体。素材库列表 = 查 `files` 表。
 - **打开 / 定位**：点文件 → `shell.openPath(localPath)` 用系统默认 App 打开；点「在文件夹中显示」→ `shell.showItemInFolder(localPath)`。
@@ -596,7 +596,7 @@ POST /api/lib/open     { localPath }              → shell.openPath（系统默
 |---|---|---|---|
 | ① | **AI 模型（按能力分层）** | 4 个 `cap` 槽位（供应商下拉 + Key + 保存 + 状态灯），顶部 `cap-note` 说明"不固化厂商 + 经代理层" | `V_settings()` 第一面板 |
 | ② | **AI 代理层** | 只读说明：调用经后端代理、Key 仅本地加密、前端不持有 | 第二面板 |
-| ③ | **素材库（本地直写）** | 「导出根目录」选择（默认 `~/Documents/电信新媒体工作台/`）+ 三文件夹计数 + 打开素材库 | 第三面板（`pickRootDir()`） |
+| ③ | **素材库（本地直写）** | 「导出根目录」选择（默认 `~/Documents/AI新媒体工作台/`）+ 三文件夹计数 + 打开素材库 | 第三面板（`pickRootDir()`） |
 | ④ | **抓取账号（可选）** | 抖音/小红书 登录态、扫码登录、一键清除 | 第四面板 |
 
 ### 6.6　API 契约（设置模块）
@@ -669,8 +669,8 @@ newmedia-workbench/
 
 | 平台 | target | 产物 | 签名 |
 |---|---|---|---|
-| **macOS** | `dmg` | `电信新媒体工作台-x.y.z.dmg`（含 `zip` 兜底） | **Apple 开发者证书 codesign + notarize**（公证，否则 Ventura+ 直接拦截） |
-| **Windows** | `nsis`（`.exe` 安装器）/ `msi` | `电信新媒体工作台-x.y.z-setup.exe` + `.msi` | **Authenticode 代码签名（EV 或 OV 证书）**，否则 SmartScreen 报未知发布者 |
+| **macOS** | `dmg` | `AI新媒体工作台-x.y.z.dmg`（含 `zip` 兜底） | **Apple 开发者证书 codesign + notarize**（公证，否则 Ventura+ 直接拦截） |
+| **Windows** | `nsis`（`.exe` 安装器）/ `msi` | `AI新媒体工作台-x.y.z-setup.exe` + `.msi` | **Authenticode 代码签名（EV 或 OV 证书）**，否则 SmartScreen 报未知发布者 |
 
 - 两套产物的构建参数放 `electron-builder.yml` 的 `mac` / `win` 段，条件编译 `appId`、图标、证书环境变量。
 - `nsis` 安装器支持「创建桌面快捷方式 / 开机不启动 / 安装目录可选」，符合内部软件分发习惯。

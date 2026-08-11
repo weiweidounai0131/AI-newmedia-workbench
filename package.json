@@ -4,7 +4,7 @@
   "description": "AI新媒体工作台（Electron 桌面端）",
   "type": "module",
   "main": "out/main/index.cjs",
-  "author": "广州电信",
+  "author": "jiangjiawei",
   "license": "UNLICENSED",
   "scripts": {
     "dev": "electron-vite dev",

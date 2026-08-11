@@ -38,7 +38,7 @@ win:
     - nsis
     - msi
   artifactName: ${productName}-${version}-setup.${ext}
-  publisherName: 中国电信股份有限公司广州分公司
+  publisherName: jiangjiawei
 nsis:
   oneClick: false
   perMachine: false
