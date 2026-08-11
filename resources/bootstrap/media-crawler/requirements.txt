@@ -1,0 +1,8 @@
+# MediaCrawler 代理（有头 Playwright + FastAPI）依赖
+# 安装：<venv>/bin/pip install -r requirements.txt && <venv>/bin/playwright install chromium
+fastapi==0.110.2
+uvicorn==0.29.0
+playwright==1.62.0
+httpx==0.28.1
+aiofiles==23.2.1
+pydantic==2.13.4

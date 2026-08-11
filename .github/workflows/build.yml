@@ -1,0 +1,126 @@
+# M5 双平台打包 / 签名 / CI（单一事实源 BACKEND-PATH §7）
+#
+# - macOS 包（.dmg / .zip）在 macos-latest 构建并自动 codesign + notarize
+# - Windows 包（.exe / .msi）在 windows-latest 构建并自动 Authenticode 签名
+# - 两 job 并行；打 tag（v*）时自动合入 GitHub Draft Release
+# - 证书 Secrets 两 runner 隔离：Mac 持有 APPLE_*，Win 持有 WIN_CSC_*
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    name: Build macOS (.dmg / .zip)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          # 壳二进制由 electron-builder 在构建期自行下载，安装期跳过以加速
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Verify icons present
+        run: |
+          test -f resources/icon.icns || { echo "::error::缺少 resources/icon.icns（macOS 图标），请先放入；详见 resources/README.md"; exit 1; }
+          echo "macOS icon OK"
+
+      - name: Import Apple codesign certificate
+        if: ${{ secrets.APPLE_CERT_BASE64 != '' }}
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          echo "$APPLE_CERT_BASE64" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+          rm -f cert.p12
+
+      - name: Build & sign macOS
+        run: npm run dist:mac
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/*.{dmg,zip}
+          if-no-files-found: error
+
+  build-win:
+    name: Build Windows (.exe / .msi)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Verify icons present
+        run: |
+          if (-not (Test-Path resources/icon.ico)) {
+            Write-Error "缺少 resources/icon.ico（Windows 图标），请先放入；详见 resources/README.md"
+            exit 1
+          }
+          Write-Host "Windows icon OK"
+
+      - name: Build & sign Windows
+        run: npm run dist:win
+        env:
+          # §7 约定 Windows 证书 Secrets 名为 WIN_CSC_*，映射为 electron-builder 标准变量
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: win
+          path: dist/*.{exe,msi}
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub Release
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true
+          generate_release_notes: true

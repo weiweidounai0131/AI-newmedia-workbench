@@ -1,0 +1,26 @@
+node_modules/
+out/
+dist/
+.data/
+.mc-data/
+*.log
+.DS_Store
+**/__pycache__/
+**/*.py[cod]
+# 本地 dev 仅用于 M1 后端验证，敏感设置不入库
+src-env.d.ts
+
+# 本机运行时与登录态：由首次使用引导在目标电脑生成，绝不入库
+tools/MediaCrawler/.venv/
+tools/MediaCrawler/browser_data/
+tools/MediaCrawler/data/
+tools/MediaCrawler/cache/
+tools/wechat-mp-tools/venv*/
+tools/wechat-mp-tools/data/
+tools/wechat-mp-tools/data
+tools/wechat-mp-tools/build/
+tools/wechat-mp-tools/dist/
+resources/runtime/
+
+# 内嵌开源项目的版本控制元数据不属于本项目源码
+**/.git/

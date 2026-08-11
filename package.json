@@ -1,0 +1,52 @@
+{
+  "name": "newmedia-workbench",
+  "version": "0.1.0",
+  "description": "AI新媒体工作台（Electron 桌面端）",
+  "type": "module",
+  "main": "out/main/index.cjs",
+  "author": "广州电信",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev:server": "tsx watch electron/main/server/dev.ts",
+    "dev:web": "vite --config vite.config.ts --host 127.0.0.1",
+    "verify:m1": "tsx electron/main/server/verify.ts",
+    "stage:runtime": "node scripts/stage-runtime.mjs",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder --publish=never",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish=never",
+    "dist:win": "electron-vite build && electron-builder --win --publish=never"
+  },
+  "dependencies": {
+    "@heroui/react": "^2.8.10",
+    "docx": "^9.0.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "framer-motion": "^11.18.2",
+    "https-proxy-agent": "^7.0.6",
+    "openai": "^4.56.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@heroui/theme": "^2.4.26",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "electron": "^32.1.0",
+    "electron-builder": "^25.0.5",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  }
+}

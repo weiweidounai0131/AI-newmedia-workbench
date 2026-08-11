@@ -1,0 +1,46 @@
+# 单一事实源：BACKEND-PATH §7（打包、签名、CI 双平台产出）
+#
+# 签名/公证均走环境变量注入（CI Secrets，不落库）：
+#   macOS：APPLE_CERT_BASE64 / APPLE_CERT_PASSWORD / APPLE_TEAM_ID / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD
+#          齐全则 electron-builder 自动 codesign + xcrun notarytool 公证 + staple
+#   Windows：CSC_LINK（p12 base64，CI 中以 WIN_CSC_LINK 注入后改名）/ CSC_KEY_PASSWORD（对应 WIN_CSC_KEY_PASSWORD）
+#          齐全则 electron-builder 内建 Authenticode 签名
+# 缺证书时本地 `npm run dist` 仍能产出「未签名」包，仅 Gatekeeper/SmartScreen 会拦截最终用户。
+#
+# 前置依赖：resources/icon.icns（mac）与 resources/icon.ico（win）必须存在，否则打包中断。
+appId: com.gztelecom.newmedia.workbench
+productName: AI新媒体工作台
+icon: resources/icon
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: resources
+    to: resources
+    filter:
+      - "**/*"
+      - "!runtime/**"
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.business
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  artifactName: ${productName}-${version}.${ext}
+win:
+  target:
+    - nsis
+    - msi
+  artifactName: ${productName}-${version}-setup.${ext}
+  publisherName: 中国电信股份有限公司广州分公司
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
