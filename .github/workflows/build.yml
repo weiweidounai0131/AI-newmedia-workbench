@@ -20,6 +20,9 @@ jobs:
   build-mac:
     name: Build macOS (.dmg / .zip)
     runs-on: macos-latest
+    env:
+      UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+      APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,14 +43,12 @@ jobs:
           echo "macOS icon OK"
 
       - name: Configure update source
-        if: ${{ secrets.UPDATE_SERVER_URL != '' }}
-        env:
-          UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+        if: ${{ env.UPDATE_SERVER_URL != '' }}
         run: |
           printf '{\n  "provider": "generic",\n  "url": "%s"\n}\n' "$UPDATE_SERVER_URL" > resources/update-source.json
 
       - name: Import Apple codesign certificate
-        if: ${{ secrets.APPLE_CERT_BASE64 != '' }}
+        if: ${{ env.APPLE_CERT_BASE64 != '' }}
         env:
           APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -84,6 +85,8 @@ jobs:
   build-win:
     name: Build Windows (.exe / .msi)
     runs-on: windows-latest
+    env:
+      UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -106,7 +109,7 @@ jobs:
           Write-Host "Windows icon OK"
 
       - name: Configure update source
-        if: ${{ secrets.UPDATE_SERVER_URL != '' }}
+        if: ${{ env.UPDATE_SERVER_URL != '' }}
         shell: bash
         env:
           UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
