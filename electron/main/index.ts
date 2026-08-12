@@ -1,17 +1,113 @@
 // Electron 主进程入口：启动 Express 后端（同进程）+ 创建渲染窗口
 // 单一事实源：BACKEND-PATH §0（后端跑主进程）/ §7（electron-vite）
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, type MessageBoxOptions } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { createApp } from './server/index.js';
 import { startMediaCrawler } from './server/services/mediaCrawler.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import { readFile } from 'node:fs/promises';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let server: http.Server | null = null;
 let apiBase = '';
 let startingServer: Promise<number> | null = null;
+let updateCheckStarted = false;
+let updateEventsBound = false;
+
+type UpdateSource = { provider?: string; url?: string };
+
+/**
+ * 更新包地址是公开读取地址，不是上传密钥。它单独留在 resources/update-source.json，
+ * 因而同一套私有源码可以分别发布到不同的 R2/CDN 目录。
+ */
+async function readUpdateSource(): Promise<string | null> {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'resources', 'update-source.json')]
+    : [path.join(process.cwd(), 'resources', 'update-source.json')];
+
+  for (const file of candidates) {
+    try {
+      const raw = await readFile(file, 'utf8');
+      const source = JSON.parse(raw) as UpdateSource;
+      if (source.provider && source.provider !== 'generic') continue;
+      if (typeof source.url !== 'string' || !/^https:\/\//i.test(source.url)) continue;
+      return source.url.replace(/\/+$/, '');
+    } catch {
+      // 首次发布前或开发环境未配置更新源时，自动更新安静跳过。
+    }
+  }
+  return null;
+}
+
+function bindUpdateEvents(): void {
+  if (updateEventsBound) return;
+  updateEventsBound = true;
+
+  autoUpdater.on('update-available', async (info) => {
+    const options: MessageBoxOptions = {
+      type: 'info',
+      title: '发现新版本',
+      message: `发现 AI新媒体工作台 ${info.version}，建议更新。`,
+      detail: '更新包将从已配置的更新源下载；当前数据、素材库和本机登录状态不会被清除。',
+      buttons: ['下载更新', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+    };
+    const result = mainWindow
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      void autoUpdater.downloadUpdate().catch((error) => {
+        console.warn('[updater] 下载更新失败：', error);
+      });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    const options: MessageBoxOptions = {
+      type: 'info',
+      title: '更新已准备就绪',
+      message: `AI新媒体工作台 ${info.version} 已下载完成。`,
+      detail: '选择“立即重启更新”会关闭工作台并安装新版；选择“稍后”将在下次退出应用时安装。',
+      buttons: ['立即重启更新', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const result = mainWindow
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    if (result.response === 0) autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (error) => {
+    // 更新服务不可用不能影响主流程；详细原因仅写入主进程日志，避免打扰用户。
+    console.warn('[updater] 自动更新检查失败：', error);
+  });
+}
+
+async function checkForUpdates(): Promise<void> {
+  if (!app.isPackaged || updateCheckStarted) return;
+  updateCheckStarted = true;
+  const url = await readUpdateSource();
+  if (!url) {
+    console.info('[updater] 未配置更新源，本次跳过版本检查');
+    return;
+  }
+
+  bindUpdateEvents();
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.setFeedURL({ provider: 'generic', url });
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    console.warn('[updater] 检查更新失败：', error);
+  }
+}
 
 // 主进程内起 Express（loopback，仅本机可达）
 function startServer(): Promise<number> {
@@ -72,6 +168,9 @@ app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0] || null;
   });
   createWindow();
+
+  // 每次打开已安装应用都检查一次版本。更新源尚未配置或暂时不可用时不阻断工作台。
+  void checkForUpdates();
 
   // MediaCrawler 仅服务于平台抓取；失败或较慢不应阻断整个工作台。
   void startMediaCrawler()

@@ -11,6 +11,11 @@
 appId: com.gztelecom.newmedia.workbench
 productName: AI新媒体工作台
 icon: resources/icon
+publish:
+  # 仅用于生成 electron-updater 所需的 latest*.yml；运行时真实 R2 地址由
+  # resources/update-source.json 覆盖，不会把上传密钥或私有仓库凭据打进应用。
+  provider: generic
+  url: https://updates.example.invalid/ai-newmedia-workbench
 directories:
   output: dist
   buildResources: resources

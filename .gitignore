@@ -22,5 +22,8 @@ tools/wechat-mp-tools/build/
 tools/wechat-mp-tools/dist/
 resources/runtime/
 
+# 自动更新公开读取地址按发布环境配置；上传 R2 的密钥只保存于 GitHub Actions Secrets。
+resources/update-source.json
+
 # 内嵌开源项目的版本控制元数据不属于本项目源码
 **/.git/
