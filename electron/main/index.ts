@@ -51,12 +51,18 @@ async function installMacUpdate(): Promise<void> {
   const targetApp = path.resolve(process.execPath, '../../..');
   const stagingDir = path.join(cacheDir, `install-${Date.now()}`);
   const scriptPath = path.join(cacheDir, `apply-update-${Date.now()}.sh`);
+  const logPath = path.join(cacheDir, 'apply-update.log');
+  const jobLabel = `com.newmedia.workbench.update.${Date.now()}`;
   await mkdir(cacheDir, { recursive: true });
-  const script = `#!/bin/zsh\nset -eu\nzip_path=\"$1\"\ntarget_app=\"$2\"\nstaging_dir=\"$3\"\nbackup_app=\"${targetApp}.previous\"\n/usr/bin/sleep 2\n/bin/rm -rf \"$staging_dir\" \"$backup_app\"\n/bin/mkdir -p \"$staging_dir\"\n/usr/bin/ditto -x -k \"$zip_path\" \"$staging_dir\"\nnew_app=$(/usr/bin/find \"$staging_dir\" -maxdepth 2 -type d -name '*.app' -print -quit)\nif [ -z \"$new_app\" ]; then exit 1; fi\n/bin/mv \"$target_app\" \"$backup_app\"\nif /bin/mv \"$new_app\" \"$target_app\"; then\n  /bin/rm -rf \"$backup_app\" \"$staging_dir\"\n  /usr/bin/open \"$target_app\"\nelse\n  /bin/mv \"$backup_app\" \"$target_app\"\n  exit 1\nfi\n`;
+  const script = `#!/bin/zsh\nset -eu\nzip_path=\"$1\"\ntarget_app=\"$2\"\nstaging_dir=\"$3\"\nlog_path=\"$4\"\nbackup_app=\"${targetApp}.previous\"\nexec > \"$log_path\" 2>&1\necho \"[$(/bin/date)] Start macOS app update\"\n/usr/bin/sleep 5\n/bin/rm -rf \"$staging_dir\" \"$backup_app\"\n/bin/mkdir -p \"$staging_dir\"\n/usr/bin/ditto -x -k \"$zip_path\" \"$staging_dir\"\nnew_app=$(/usr/bin/find \"$staging_dir\" -maxdepth 2 -type d -name '*.app' -print -quit)\nif [ -z \"$new_app\" ]; then echo \"No app bundle found\"; exit 1; fi\n/bin/mv \"$target_app\" \"$backup_app\"\nif /bin/mv \"$new_app\" \"$target_app\"; then\n  /bin/rm -rf \"$backup_app\" \"$staging_dir\"\n  echo \"[$(/bin/date)] Update installed; reopening app\"\n  /usr/bin/open \"$target_app\"\nelse\n  echo \"Move failed; restoring previous app\"\n  /bin/mv \"$backup_app\" \"$target_app\"\n  exit 1\nfi\n`;
   await writeFile(scriptPath, script, { mode: 0o700 });
-  const child = spawn('/bin/zsh', [scriptPath, zipPath, targetApp, stagingDir], { detached: true, stdio: 'ignore' });
-  child.unref();
-  app.quit();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('/bin/launchctl', ['submit', '-l', jobLabel, '/bin/zsh', scriptPath, zipPath, targetApp, stagingDir, logPath], { stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`launchctl submit failed (${code ?? 'unknown'})`)));
+  });
+  // 任务已交给 launchd，强制退出当前进程，避免 App 文件仍被占用。
+  app.exit(0);
 }
 
 /**
