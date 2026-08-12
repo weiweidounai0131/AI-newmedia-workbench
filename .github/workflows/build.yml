@@ -32,7 +32,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        # HeroUI 当前依赖树同时兼容项目现有的 Tailwind 3；按 lockfile
+        # 以兼容模式安装，避免 CI 擅自升级到 Tailwind 4。
+        run: npm install --legacy-peer-deps
         env:
           # 壳二进制由 electron-builder 在构建期自行下载，安装期跳过以加速
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -96,7 +98,8 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        # 与 macOS 构建保持同一份锁定依赖树。
+        run: npm install --legacy-peer-deps
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
