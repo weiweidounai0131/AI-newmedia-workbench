@@ -362,6 +362,8 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .set-row .s-main{flex:1;min-width:0}
 .set-row .s-main .s-t{font-weight:600;font-size:13.5px}
 .set-row .s-main .s-d{font-size:12px;color:var(--text-3);margin-top:2px}
+.cap-key-link{flex:0 0 auto;font-size:12px;color:var(--accent);white-space:nowrap;text-decoration:none}
+.cap-key-link:hover{text-decoration:underline;color:var(--accent-ink)}
 .update-download-progress{margin:0 0 8px;padding:12px 14px;border:1px solid var(--accent-line);border-radius:10px;background:var(--accent-weak)}
 .update-download-copy{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;color:var(--accent-ink)}
 .update-download-copy strong{font-variant-numeric:tabular-nums}

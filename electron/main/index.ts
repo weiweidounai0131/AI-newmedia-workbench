@@ -1,6 +1,6 @@
 // Electron 主进程入口：启动 Express 后端（同进程）+ 创建渲染窗口
 // 单一事实源：BACKEND-PATH §0（后端跑主进程）/ §7（electron-vite）
-import { app, BrowserWindow, ipcMain, dialog, type MessageBoxOptions } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, type MessageBoxOptions } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { createApp } from './server/index.js';
 import { startMediaCrawler } from './server/services/mediaCrawler.js';
@@ -237,6 +237,10 @@ function createWindow(): void {
     // 打包后 __dirname 为 app.asar/out/main；渲染页面实际位于 app.asar/out/renderer。
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
 }
 
 app.whenReady().then(async () => {

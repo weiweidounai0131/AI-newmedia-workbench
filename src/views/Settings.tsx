@@ -7,6 +7,13 @@ import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
 
+const API_KEY_PORTALS: Record<CapId, string> = {
+  text: 'https://platform.deepseek.com/',
+  visionImg: 'https://open.bigmodel.cn/',
+  visionVideo: 'https://bailian.console.aliyun.com/',
+  image: 'https://aihubmix.com/',
+};
+
 export default function Settings() {
   const settings = useApp((s) => s.settings);
   const toast = useToastMsg();
@@ -253,6 +260,7 @@ export default function Settings() {
                   </div>
                   <div className="s-d">{def.id === 'image' ? `AIHubMix · ${model} · OpenAI 兼容接口` : def.keyId}</div>
                 </div>
+                <a className="cap-key-link" href={API_KEY_PORTALS[def.id]} target="_blank" rel="noreferrer">点击获取 API Key</a>
                 <div className="cap-ctl">
                   <Select
                     className="cap-select"
