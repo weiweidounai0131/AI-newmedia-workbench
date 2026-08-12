@@ -16,8 +16,11 @@ let apiBase = '';
 let startingServer: Promise<number> | null = null;
 let updateCheckStarted = false;
 let updateEventsBound = false;
+let updateCheckInFlight: Promise<UpdateCheckResult> | null = null;
+let notifyNoUpdate = false;
 
 type UpdateSource = { provider?: string; url?: string };
+type UpdateCheckResult = { ok: boolean; reason?: 'not-packaged' | 'not-configured' | 'checking' | 'failed' };
 
 /**
  * 更新包地址是公开读取地址，不是上传密钥。它单独留在 resources/update-source.json，
@@ -47,6 +50,7 @@ function bindUpdateEvents(): void {
   updateEventsBound = true;
 
   autoUpdater.on('update-available', async (info) => {
+    notifyNoUpdate = false;
     const options: MessageBoxOptions = {
       type: 'info',
       title: '发现新版本',
@@ -83,30 +87,52 @@ function bindUpdateEvents(): void {
     if (result.response === 0) autoUpdater.quitAndInstall();
   });
 
+  autoUpdater.on('update-not-available', async (info) => {
+    if (!notifyNoUpdate) return;
+    notifyNoUpdate = false;
+    const options: MessageBoxOptions = {
+      type: 'info',
+      title: '已是最新版本',
+      message: `当前已是最新版本（${info.version}）。`,
+      buttons: ['知道了'],
+      defaultId: 0,
+    };
+    if (mainWindow) await dialog.showMessageBox(mainWindow, options);
+    else await dialog.showMessageBox(options);
+  });
+
   autoUpdater.on('error', (error) => {
+    notifyNoUpdate = false;
     // 更新服务不可用不能影响主流程；详细原因仅写入主进程日志，避免打扰用户。
     console.warn('[updater] 自动更新检查失败：', error);
   });
 }
 
-async function checkForUpdates(): Promise<void> {
-  if (!app.isPackaged || updateCheckStarted) return;
+async function checkForUpdates(manual = false): Promise<UpdateCheckResult> {
+  if (!app.isPackaged) return { ok: false, reason: 'not-packaged' };
+  if (!manual && updateCheckStarted) return { ok: true };
+  if (updateCheckInFlight) return { ok: false, reason: 'checking' };
   updateCheckStarted = true;
   const url = await readUpdateSource();
   if (!url) {
     console.info('[updater] 未配置更新源，本次跳过版本检查');
-    return;
+    return { ok: false, reason: 'not-configured' };
   }
 
   bindUpdateEvents();
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.setFeedURL({ provider: 'generic', url });
-  try {
-    await autoUpdater.checkForUpdates();
-  } catch (error) {
-    console.warn('[updater] 检查更新失败：', error);
-  }
+  notifyNoUpdate = manual;
+  updateCheckInFlight = autoUpdater.checkForUpdates()
+    .then(() => ({ ok: true }))
+    .catch((error) => {
+      notifyNoUpdate = false;
+      console.warn('[updater] 检查更新失败：', error);
+      return { ok: false, reason: 'failed' as const };
+    })
+    .finally(() => { updateCheckInFlight = null; });
+  return updateCheckInFlight;
 }
 
 // 主进程内起 Express（loopback，仅本机可达）
@@ -159,6 +185,7 @@ app.whenReady().then(async () => {
   // 也不能因此全部出现 Failed to fetch。抓取代理改为窗口创建后后台就绪。
   await startServer();
   ipcMain.handle('api-base', () => apiBase);
+  ipcMain.handle('check-for-updates', () => checkForUpdates(true));
   ipcMain.handle('choose-library-root', async () => {
     const options = {
       title: '选择素材库本地目录',

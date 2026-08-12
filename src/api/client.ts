@@ -5,7 +5,11 @@ import type { CapSummary, LibFile } from '../store/appStore';
 
 declare global {
   interface Window {
-    api?: { getApiBase: () => Promise<string>; chooseLibraryRoot?: () => Promise<string | null> };
+    api?: {
+      getApiBase: () => Promise<string>;
+      chooseLibraryRoot?: () => Promise<string | null>;
+      checkForUpdates?: () => Promise<{ ok: boolean; reason?: string }>;
+    };
   }
 }
 
@@ -116,6 +120,9 @@ export const api = {
   initializeLibrary: () => req<{ rootDir: string | null; missingFolders: ('选题' | '创意' | '洗稿' | '图片')[]; ready: boolean; files: LibFile[] }>('/api/library/initialize', { method: 'POST' }),
   openLibraryFile: (folder: string, name: string, reveal = false) => req<{ ok: boolean }>('/api/library/open', { method: 'POST', body: JSON.stringify({ folder, name, reveal }) }),
   chooseLibraryRoot: () => window.api?.chooseLibraryRoot ? window.api.chooseLibraryRoot() : Promise.resolve(null),
+  checkForUpdates: () => window.api?.checkForUpdates
+    ? window.api.checkForUpdates()
+    : Promise.resolve({ ok: false, reason: 'not-packaged' }),
   exportLib: (body: { folder: string; name: string; kind: string; content?: string; data?: string; topics?: any[] }) =>
     req<{ ok: boolean; files: LibFile[]; error?: string }>('/api/library/export', { method: 'POST', body: JSON.stringify(body) }),
   downloadWord: async (body: { name: string; content: string }) => {

@@ -31,6 +31,7 @@ export default function Settings() {
   }>({ open: false, platform: '', qr: null, headful: true, error: null });
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof api.runtimeStatus>> | null>(null);
   const [runtimeInstalling, setRuntimeInstalling] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -125,6 +126,27 @@ export default function Settings() {
     }
   }
 
+  async function checkForUpdates() {
+    setCheckingUpdate(true);
+    try {
+      const result = await api.checkForUpdates();
+      if (!result.ok) {
+        const message: Record<string, string> = {
+          'not-packaged': '请在已安装的软件中检查更新',
+          'not-configured': '更新服务尚未配置',
+          checking: '正在检查更新，请稍候',
+          failed: '检查更新失败，请稍后重试',
+        };
+        toast(message[result.reason || 'failed'] || '检查更新失败，请稍后重试', result.reason === 'checking' ? 'warning' : 'danger');
+      }
+      // 有新版本或已是最新版本均由系统弹窗提示，避免与应用内提示重复。
+    } catch (e: any) {
+      toast(e?.message || '检查更新失败，请稍后重试', 'danger');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
   const capMeta = (cap: CapId) => {
     const def = CAP_SLOTS[cap];
     const sum = settings?.caps.find((c) => c.cap === cap);
@@ -189,6 +211,23 @@ export default function Settings() {
         <Icon name="alert" className="ic" size={18} />
         <div>
           <b>抓取合规提醒</b>：自动抓取需平台登录态，违反抖音 / 小红书 ToS，有封号 / IP 风险。仅限自用、限频、不转卖；未配置时退化为手动贴链接。
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3><Icon name="refresh" className="ic" size={18} /> 软件更新</h3>
+        </div>
+        <div className="panel-body">
+          <div className="set-row" style={{ border: 'none' }}>
+            <div className="s-main">
+              <div className="s-t">检查新版本</div>
+              <div className="s-d">工作台每次启动会自动检查更新；你也可以随时手动检查。发现新版后可自行选择下载并重启安装。</div>
+            </div>
+            <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={checkingUpdate} onPress={() => void checkForUpdates()}>
+              <Icon name="refresh" className="ic" size={14} /> 检查更新
+            </Button>
+          </div>
         </div>
       </div>
 
