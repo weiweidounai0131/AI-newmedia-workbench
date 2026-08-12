@@ -1,0 +1,7 @@
+name = "ai-newmedia-workbench-updates"
+main = "src/index.ts"
+compatibility_date = "2026-08-12"
+
+[[r2_buckets]]
+binding = "UPDATES"
+bucket_name = "ai-newmedia-workbench-updates"
