@@ -45,10 +45,13 @@ jobs:
           test -n "$R2_ACCOUNT_ID" && test -n "$R2_BUCKET" && test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
           mac_path="$(awk '/^path:/{print $2; exit}' dist/latest-mac.yml)"
           mac_zip="$(find dist -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-          test -n "$mac_path" && test -f "$mac_zip"
+          mac_dmg="$(find dist -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          test -n "$mac_path" && test -f "$mac_zip" && test -f "$mac_dmg"
           mkdir -p updater-files
           cp "$mac_zip" "updater-files/$mac_path"
           cp "$mac_zip.blockmap" "updater-files/$mac_path.blockmap"
+          cp "$mac_dmg" "updater-files/$(basename "$mac_dmg")"
+          cp "$mac_dmg.blockmap" "updater-files/$(basename "$mac_dmg").blockmap"
           cp dist/latest-mac.yml updater-files/latest-mac.yml
           for file in updater-files/*; do
             [ "${file##*.}" = 'yml' ] && continue
