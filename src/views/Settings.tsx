@@ -214,23 +214,6 @@ export default function Settings() {
         </div>
       </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <h3><Icon name="refresh" className="ic" size={18} /> 软件更新</h3>
-        </div>
-        <div className="panel-body">
-          <div className="set-row" style={{ border: 'none' }}>
-            <div className="s-main">
-              <div className="s-t">检查新版本</div>
-              <div className="s-d">工作台每次启动会自动检查更新；你也可以随时手动检查。发现新版后可自行选择下载并重启安装。</div>
-            </div>
-            <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={checkingUpdate} onPress={() => void checkForUpdates()}>
-              <Icon name="refresh" className="ic" size={14} /> 检查更新
-            </Button>
-          </div>
-        </div>
-      </div>
-
       {/* AI 模型（按能力分层） */}
       <div className="panel">
         <div className="panel-head">
@@ -474,6 +457,23 @@ export default function Settings() {
               <Icon name="alert" className="ic" size={13} /> MediaCrawler 代理未启动，登录与真实搜索不可用。请确认 .workbuddy/binaries/python/envs/media-crawler 存在且 server.py 可运行。
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3><Icon name="refresh" className="ic" size={18} /> 软件更新</h3>
+        </div>
+        <div className="panel-body">
+          <div className="set-row" style={{ border: 'none' }}>
+            <div className="s-main">
+              <div className="s-t">检查新版本</div>
+              <div className="s-d">工作台每次启动会自动检查更新；你也可以随时手动检查。发现新版后可自行选择下载并重启安装。</div>
+            </div>
+            <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={checkingUpdate} onPress={() => void checkForUpdates()}>
+              <Icon name="refresh" className="ic" size={14} /> 检查更新
+            </Button>
+          </div>
         </div>
       </div>
 
