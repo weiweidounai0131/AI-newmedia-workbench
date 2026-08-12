@@ -7,7 +7,8 @@ import { startMediaCrawler } from './server/services/mediaCrawler.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -18,9 +19,45 @@ let updateCheckStarted = false;
 let updateEventsBound = false;
 let updateCheckInFlight: Promise<UpdateCheckResult> | null = null;
 let notifyNoUpdate = false;
+let updateStatus: UpdateStatus = { phase: 'idle', percent: 0 };
 
 type UpdateSource = { provider?: string; url?: string };
 type UpdateCheckResult = { ok: boolean; reason?: 'not-packaged' | 'not-configured' | 'checking' | 'failed' };
+type UpdateStatus = {
+  phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+  percent: number;
+  transferred?: number;
+  total?: number;
+  version?: string;
+  message?: string;
+};
+
+function publishUpdateStatus(next: UpdateStatus): void {
+  updateStatus = next;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', updateStatus);
+  if (next.phase === 'downloading' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setProgressBar(Math.max(0, Math.min(1, next.percent / 100)));
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setProgressBar(-1);
+  }
+}
+
+/** macOS 在应用退出后以独立脚本回滚式替换 App，避免安装器静默失败。 */
+async function installMacUpdate(): Promise<void> {
+  // electron-updater 的 macOS 下载目录以 userData 的目录名为基础。
+  // Electron 32 的 TypeScript 类型未公开 getPath('cache')，故显式取系统缓存目录。
+  const cacheDir = path.join(app.getPath('home'), 'Library', 'Caches', `${path.basename(app.getPath('userData'))}-updater`);
+  const zipPath = path.join(cacheDir, 'update.zip');
+  const targetApp = path.resolve(process.execPath, '../../..');
+  const stagingDir = path.join(cacheDir, `install-${Date.now()}`);
+  const scriptPath = path.join(cacheDir, `apply-update-${Date.now()}.sh`);
+  await mkdir(cacheDir, { recursive: true });
+  const script = `#!/bin/zsh\nset -eu\nzip_path=\"$1\"\ntarget_app=\"$2\"\nstaging_dir=\"$3\"\nbackup_app=\"${targetApp}.previous\"\n/usr/bin/sleep 2\n/bin/rm -rf \"$staging_dir\" \"$backup_app\"\n/bin/mkdir -p \"$staging_dir\"\n/usr/bin/ditto -x -k \"$zip_path\" \"$staging_dir\"\nnew_app=$(/usr/bin/find \"$staging_dir\" -maxdepth 2 -type d -name '*.app' -print -quit)\nif [ -z \"$new_app\" ]; then exit 1; fi\n/bin/mv \"$target_app\" \"$backup_app\"\nif /bin/mv \"$new_app\" \"$target_app\"; then\n  /bin/rm -rf \"$backup_app\" \"$staging_dir\"\n  /usr/bin/open \"$target_app\"\nelse\n  /bin/mv \"$backup_app\" \"$target_app\"\n  exit 1\nfi\n`;
+  await writeFile(scriptPath, script, { mode: 0o700 });
+  const child = spawn('/bin/zsh', [scriptPath, zipPath, targetApp, stagingDir], { detached: true, stdio: 'ignore' });
+  child.unref();
+  app.quit();
+}
 
 /**
  * 更新包地址是公开读取地址，不是上传密钥。它单独留在 resources/update-source.json，
@@ -51,6 +88,7 @@ function bindUpdateEvents(): void {
 
   autoUpdater.on('update-available', async (info) => {
     notifyNoUpdate = false;
+    publishUpdateStatus({ phase: 'available', percent: 0, version: info.version });
     const options: MessageBoxOptions = {
       type: 'info',
       title: '发现新版本',
@@ -64,13 +102,23 @@ function bindUpdateEvents(): void {
       ? await dialog.showMessageBox(mainWindow, options)
       : await dialog.showMessageBox(options);
     if (result.response === 0) {
+      publishUpdateStatus({ phase: 'downloading', percent: 0, version: info.version, message: '正在下载更新…' });
       void autoUpdater.downloadUpdate().catch((error) => {
+        publishUpdateStatus({ phase: 'error', percent: 0, version: info.version, message: '更新下载失败，请稍后重试。' });
         console.warn('[updater] 下载更新失败：', error);
       });
     }
   });
 
+  autoUpdater.on('download-progress', (progress) => {
+    publishUpdateStatus({
+      phase: 'downloading', percent: Math.round(progress.percent), transferred: progress.transferred,
+      total: progress.total, message: '正在下载更新…',
+    });
+  });
+
   autoUpdater.on('update-downloaded', async (info) => {
+    publishUpdateStatus({ phase: 'downloaded', percent: 100, version: info.version, message: '更新已下载完成，等待安装。' });
     const options: MessageBoxOptions = {
       type: 'info',
       title: '更新已准备就绪',
@@ -84,7 +132,17 @@ function bindUpdateEvents(): void {
     const result = mainWindow
       ? await dialog.showMessageBox(mainWindow, options)
       : await dialog.showMessageBox(options);
-    if (result.response === 0) autoUpdater.quitAndInstall();
+    if (result.response === 0) {
+      publishUpdateStatus({ phase: 'installing', percent: 100, version: info.version, message: '正在安装更新并重启…' });
+      if (process.platform === 'darwin') {
+        void installMacUpdate().catch((error) => {
+          publishUpdateStatus({ phase: 'error', percent: 100, version: info.version, message: '安装更新失败，请重新下载完整安装包。' });
+          console.warn('[updater] macOS 安装更新失败：', error);
+        });
+      } else {
+        autoUpdater.quitAndInstall();
+      }
+    }
   });
 
   autoUpdater.on('update-not-available', async (info) => {
@@ -105,6 +163,7 @@ function bindUpdateEvents(): void {
     notifyNoUpdate = false;
     // 更新服务不可用不能影响主流程；详细原因仅写入主进程日志，避免打扰用户。
     console.warn('[updater] 自动更新检查失败：', error);
+    if (updateStatus.phase === 'downloading') publishUpdateStatus({ phase: 'error', percent: 0, message: '更新下载失败，请稍后重试。' });
   });
 }
 
@@ -186,6 +245,7 @@ app.whenReady().then(async () => {
   await startServer();
   ipcMain.handle('api-base', () => apiBase);
   ipcMain.handle('check-for-updates', () => checkForUpdates(true));
+  ipcMain.handle('get-update-status', () => updateStatus);
   ipcMain.handle('choose-library-root', async () => {
     const options = {
       title: '选择素材库本地目录',

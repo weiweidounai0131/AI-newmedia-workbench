@@ -9,6 +9,8 @@ declare global {
       getApiBase: () => Promise<string>;
       chooseLibraryRoot?: () => Promise<string | null>;
       checkForUpdates?: () => Promise<{ ok: boolean; reason?: string }>;
+      getUpdateStatus?: () => Promise<UpdateStatus>;
+      onUpdateStatus?: (callback: (status: UpdateStatus) => void) => () => void;
     };
   }
 }
@@ -67,6 +69,14 @@ interface RuntimeSetupResp {
   message: string;
   components: { id: string; label: string; ready: boolean; detail: string }[];
 }
+export interface UpdateStatus {
+  phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+  percent: number;
+  transferred?: number;
+  total?: number;
+  version?: string;
+  message?: string;
+}
 interface ChutuResp {
   images?: { b64: string }[];
   model?: string;
@@ -123,6 +133,10 @@ export const api = {
   checkForUpdates: () => window.api?.checkForUpdates
     ? window.api.checkForUpdates()
     : Promise.resolve({ ok: false, reason: 'not-packaged' }),
+  getUpdateStatus: () => window.api?.getUpdateStatus
+    ? window.api.getUpdateStatus()
+    : Promise.resolve({ phase: 'idle', percent: 0 } as UpdateStatus),
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => window.api?.onUpdateStatus?.(callback) || (() => {}),
   exportLib: (body: { folder: string; name: string; kind: string; content?: string; data?: string; topics?: any[] }) =>
     req<{ ok: boolean; files: LibFile[]; error?: string }>('/api/library/export', { method: 'POST', body: JSON.stringify(body) }),
   downloadWord: async (body: { name: string; content: string }) => {

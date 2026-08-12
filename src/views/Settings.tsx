@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Button, Input, Select, SelectItem, Chip, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
 import { CAP_SLOTS, type CapId } from '../../electron/main/server/services/caps';
 import { useApp, setSettings, setView } from '../store/appStore';
-import { api } from '../api/client';
+import { api, type UpdateStatus } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
@@ -32,11 +32,18 @@ export default function Settings() {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof api.runtimeStatus>> | null>(null);
   const [runtimeInstalling, setRuntimeInstalling] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (settings?.rootDir) setRootDirInput(settings.rootDir);
   }, [settings?.rootDir]);
+
+  useEffect(() => {
+    let active = true;
+    void api.getUpdateStatus().then((status) => { if (active) setUpdateStatus(status); });
+    return api.onUpdateStatus((status) => { if (active) setUpdateStatus(status); });
+  }, []);
 
   // 拉取各平台抓取登录态
   useEffect(() => {
@@ -474,6 +481,17 @@ export default function Settings() {
               <Icon name="refresh" className="ic" size={14} /> 检查更新
             </Button>
           </div>
+          {updateStatus.phase === 'downloading' && (
+            <div className="update-download-progress" role="status" aria-live="polite">
+              <div className="update-download-copy">
+                <span>{updateStatus.message || '正在下载更新…'}</span>
+                <strong>{updateStatus.percent}%</strong>
+              </div>
+              <div className="update-download-track"><div style={{ width: `${updateStatus.percent}%` }} /></div>
+            </div>
+          )}
+          {updateStatus.phase === 'installing' && <div className="tiny update-status-text">正在安装更新并重启，请稍候…</div>}
+          {updateStatus.phase === 'error' && <div className="tiny update-status-error">{updateStatus.message || '更新失败，请稍后重试。'}</div>}
         </div>
       </div>
 
