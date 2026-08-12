@@ -293,6 +293,7 @@ app.whenReady().then(async () => {
   // 也不能因此全部出现 Failed to fetch。抓取代理改为窗口创建后后台就绪。
   await startServer();
   ipcMain.handle('api-base', () => apiBase);
+  ipcMain.handle('app-version', () => app.getVersion());
   ipcMain.handle('check-for-updates', () => checkForUpdates(true));
   ipcMain.handle('get-update-status', () => updateStatus);
   ipcMain.handle('choose-library-root', async () => {

@@ -7,6 +7,7 @@ declare global {
   interface Window {
     api?: {
       getApiBase: () => Promise<string>;
+      getAppVersion?: () => Promise<string>;
       chooseLibraryRoot?: () => Promise<string | null>;
       checkForUpdates?: () => Promise<{ ok: boolean; reason?: string }>;
       getUpdateStatus?: () => Promise<UpdateStatus>;
@@ -130,6 +131,7 @@ export const api = {
   initializeLibrary: () => req<{ rootDir: string | null; missingFolders: ('选题' | '创意' | '洗稿' | '图片')[]; ready: boolean; files: LibFile[] }>('/api/library/initialize', { method: 'POST' }),
   openLibraryFile: (folder: string, name: string, reveal = false) => req<{ ok: boolean }>('/api/library/open', { method: 'POST', body: JSON.stringify({ folder, name, reveal }) }),
   chooseLibraryRoot: () => window.api?.chooseLibraryRoot ? window.api.chooseLibraryRoot() : Promise.resolve(null),
+  getAppVersion: () => window.api?.getAppVersion ? window.api.getAppVersion() : Promise.resolve('开发版'),
   checkForUpdates: () => window.api?.checkForUpdates
     ? window.api.checkForUpdates()
     : Promise.resolve({ ok: false, reason: 'not-packaged' }),

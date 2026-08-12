@@ -40,6 +40,7 @@ export default function Settings() {
   const [runtimeInstalling, setRuntimeInstalling] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
+  const [appVersion, setAppVersion] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -50,6 +51,12 @@ export default function Settings() {
     let active = true;
     void api.getUpdateStatus().then((status) => { if (active) setUpdateStatus(status); });
     return api.onUpdateStatus((status) => { if (active) setUpdateStatus(status); });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void api.getAppVersion().then((version) => { if (active) setAppVersion(version); });
+    return () => { active = false; };
   }, []);
 
   // 拉取各平台抓取登录态
@@ -512,6 +519,7 @@ export default function Settings() {
             <img className="about-icon" src={appIcon} alt="AI新媒体工作台图标" />
             <div className="about-copy">
               <div className="about-name">AI新媒体工作台</div>
+              <div className="about-meta">版本：{appVersion || '读取中…'}</div>
               <div className="about-meta">开发者：jiangjiawei</div>
               <p>面向日常新媒体内容创作的本地工作台，覆盖选题、创意、洗稿、提示词、出图与本地素材归档。</p>
               <div className="about-copyright">Copyright © 2026 jiangjiawei. 保留所有权利。</div>
