@@ -1,0 +1,57 @@
+# macOS 单端增量更新：用于快速修复与验证，不构建 Windows 安装包，且只更新 latest-mac.yml。
+name: Release macOS Update
+
+on:
+  push:
+    tags:
+      - 'mac-v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-publish-mac:
+    name: Build and publish macOS update
+    runs-on: macos-latest
+    env:
+      UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Configure update source
+        run: |
+          test -n "$UPDATE_SERVER_URL"
+          printf '{\n  "provider": "generic",\n  "url": "%s"\n}\n' "$UPDATE_SERVER_URL" > resources/update-source.json
+
+      - name: Build macOS package
+        run: npm run dist:mac
+
+      - name: Publish macOS updater files
+        run: |
+          test -n "$R2_ACCOUNT_ID" && test -n "$R2_BUCKET" && test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
+          mac_path="$(awk '/^path:/{print $2; exit}' dist/latest-mac.yml)"
+          mac_zip="$(find dist -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          test -n "$mac_path" && test -f "$mac_zip"
+          mkdir -p updater-files
+          cp "$mac_zip" "updater-files/$mac_path"
+          cp "$mac_zip.blockmap" "updater-files/$mac_path.blockmap"
+          cp dist/latest-mac.yml updater-files/latest-mac.yml
+          for file in updater-files/*; do
+            [ "${file##*.}" = 'yml' ] && continue
+            aws s3 cp "$file" "s3://$R2_BUCKET/$(basename "$file")" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
+          done
+          aws s3 cp updater-files/latest-mac.yml "s3://$R2_BUCKET/latest-mac.yml" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
