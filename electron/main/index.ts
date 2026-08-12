@@ -20,6 +20,9 @@ let updateEventsBound = false;
 let updateCheckInFlight: Promise<UpdateCheckResult> | null = null;
 let notifyNoUpdate = false;
 let updateStatus: UpdateStatus = { phase: 'idle', percent: 0 };
+let macUpdateInstallStarted = false;
+
+const LEGACY_MAC_UPDATE_JOB_PREFIX = 'com.newmedia.workbench.update.';
 
 type UpdateSource = { provider?: string; url?: string };
 type UpdateCheckResult = { ok: boolean; reason?: 'not-packaged' | 'not-configured' | 'checking' | 'failed' };
@@ -42,8 +45,37 @@ function publishUpdateStatus(next: UpdateStatus): void {
   }
 }
 
-/** macOS 在应用退出后以独立脚本回滚式替换 App，避免安装器静默失败。 */
+/** 清理 0.1.11/0.1.12 遗留的 launchd 更新任务，避免它持续重开并激活应用。 */
+async function cleanupLegacyMacUpdateJobs(): Promise<void> {
+  if (process.platform !== 'darwin') return;
+
+  const labels = await new Promise<string[]>((resolve) => {
+    const child = spawn('/bin/launchctl', ['list'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => { output += chunk; });
+    child.once('error', () => resolve([]));
+    child.once('exit', () => {
+      resolve(output
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/).at(-1) || '')
+        .filter((label) => label.startsWith(LEGACY_MAC_UPDATE_JOB_PREFIX)));
+    });
+  });
+
+  await Promise.all(labels.map((label) => new Promise<void>((resolve) => {
+    const child = spawn('/bin/launchctl', ['remove', label], { stdio: 'ignore' });
+    child.once('error', () => resolve());
+    child.once('exit', () => resolve());
+  })));
+  if (labels.length > 0) console.info(`[updater] 已清理 ${labels.length} 个旧版 macOS 更新任务`);
+}
+
+/** macOS 在应用退出后以一次性独立脚本回滚式替换 App，避免安装器静默失败。 */
 async function installMacUpdate(): Promise<void> {
+  if (macUpdateInstallStarted) return;
+  macUpdateInstallStarted = true;
+
   // electron-updater 的 macOS 下载目录以 userData 的目录名为基础。
   // Electron 32 的 TypeScript 类型未公开 getPath('cache')，故显式取系统缓存目录。
   const cacheDir = path.join(app.getPath('home'), 'Library', 'Caches', `${path.basename(app.getPath('userData'))}-updater`);
@@ -52,16 +84,21 @@ async function installMacUpdate(): Promise<void> {
   const stagingDir = path.join(cacheDir, `install-${Date.now()}`);
   const scriptPath = path.join(cacheDir, `apply-update-${Date.now()}.sh`);
   const logPath = path.join(cacheDir, 'apply-update.log');
-  const jobLabel = `com.newmedia.workbench.update.${Date.now()}`;
   await mkdir(cacheDir, { recursive: true });
   const script = `#!/bin/zsh\nset -eu\nzip_path=\"$1\"\ntarget_app=\"$2\"\nstaging_dir=\"$3\"\nlog_path=\"$4\"\nbackup_app=\"${targetApp}.previous\"\nexec > \"$log_path\" 2>&1\necho \"[$(/bin/date)] Start macOS app update\"\necho \"Target: $target_app\"\n/bin/sleep 5\n/bin/rm -rf \"$staging_dir\" \"$backup_app\"\n/bin/mkdir -p \"$staging_dir\"\n/usr/bin/ditto -x -k \"$zip_path\" \"$staging_dir\"\nnew_app=$(/usr/bin/find \"$staging_dir\" -maxdepth 2 -type d -name '*.app' -print -quit)\nif [ -z \"$new_app\" ]; then echo \"No app bundle found\"; exit 1; fi\n/bin/mv \"$target_app\" \"$backup_app\"\nif /bin/mv \"$new_app\" \"$target_app\"; then\n  /bin/rm -rf \"$backup_app\" \"$staging_dir\"\n  echo \"[$(/bin/date)] Update installed; reopening app\"\n  /usr/bin/open \"$target_app\"\nelse\n  echo \"Move failed; restoring previous app\"\n  /bin/mv \"$backup_app\" \"$target_app\"\n  exit 1\nfi\n`;
   await writeFile(scriptPath, script, { mode: 0o700 });
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('/bin/launchctl', ['submit', '-l', jobLabel, '--', '/bin/zsh', scriptPath, zipPath, targetApp, stagingDir, logPath], { stdio: 'ignore' });
+    const child = spawn('/bin/zsh', [scriptPath, zipPath, targetApp, stagingDir, logPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
     child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`launchctl submit failed (${code ?? 'unknown'})`)));
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
   });
-  // 任务已交给 launchd，强制退出当前进程，避免 App 文件仍被占用。
+  // 一次性安装进程已与当前进程分离，强制退出以释放 App 文件。
   app.exit(0);
 }
 
@@ -142,6 +179,7 @@ function bindUpdateEvents(): void {
       publishUpdateStatus({ phase: 'installing', percent: 100, version: info.version, message: '正在安装更新并重启…' });
       if (process.platform === 'darwin') {
         void installMacUpdate().catch((error) => {
+          macUpdateInstallStarted = false;
           publishUpdateStatus({ phase: 'error', percent: 100, version: info.version, message: '安装更新失败，请重新下载完整安装包。' });
           console.warn('[updater] macOS 安装更新失败：', error);
         });
@@ -250,6 +288,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  await cleanupLegacyMacUpdateJobs();
   // 本地 API 必须优先可用：即使抓取运行环境首次初始化较慢，设置、素材库、AI 等页面
   // 也不能因此全部出现 Failed to fetch。抓取代理改为窗口创建后后台就绪。
   await startServer();
