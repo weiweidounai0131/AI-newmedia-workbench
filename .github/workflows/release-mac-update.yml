@@ -19,6 +19,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: 'true'
+      # 内部开发者版不使用 Apple Developer ID；由 afterPack 生成可验证的临时签名。
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@v4
 

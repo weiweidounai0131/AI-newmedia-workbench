@@ -19,6 +19,7 @@ publish:
 directories:
   output: dist
   buildResources: resources
+afterPack: scripts/adhoc-sign-mac.cjs
 files:
   - out/**/*
   - package.json
@@ -38,6 +39,28 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   artifactName: ${productName}-${version}.${ext}
+dmg:
+  title: ${productName} ${version}
+  window:
+    width: 660
+    height: 440
+  iconSize: 92
+  contents:
+    - x: 150
+      y: 180
+      type: file
+    - x: 500
+      y: 180
+      type: link
+      path: /Applications
+    - x: 325
+      y: 350
+      type: file
+      path: resources/首次安装并修复.command
+    - x: 510
+      y: 350
+      type: file
+      path: resources/首次安装说明.txt
 win:
   target:
     - nsis
