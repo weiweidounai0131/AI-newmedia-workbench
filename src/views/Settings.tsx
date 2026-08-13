@@ -346,7 +346,7 @@ export default function Settings() {
           <div className="set-row" style={{ border: 'none' }}>
             <div className="s-main">
               <div className="s-t">抓取与下载组件</div>
-              <div className="s-d">首次使用时按当前系统下载 Python、抓取工具与 Chromium；安装包不携带大型运行时，也不会携带任何登录态。</div>
+              <div className="s-d">首次使用时会安装 Python 与抓取工具；优先复用电脑已安装的 Chrome / Edge，未检测到时才下载浏览器运行时。安装包不会携带任何登录态。</div>
               <div className="onboarding-components">{(runtime?.components || []).map((item) => <span className={`onboarding-chip ${item.ready ? 'ready' : ''}`} key={item.id}>{item.ready ? '✓' : '•'} {item.label} · {item.detail}</span>)}</div>
             </div>
             {!runtime?.ready && runtime?.packaged && <Button size="sm" color="primary" isLoading={runtimeInstalling || !!runtime?.installing} onPress={installRuntime}>安装环境</Button>}
@@ -469,14 +469,14 @@ export default function Settings() {
                   isLoading={loginLoading === p}
                   onPress={() => scrapeLogin(p)}
                 >
-                  <Icon name="spark" className="ic" size={14} /> {connected ? '重新登录' : '登录'}
+                  {!loginLoading && <Icon name="spark" className="ic" size={14} />} {connected ? '重新登录' : '登录'}
                 </Button>
               </div>
             );
           })}
           {!scrapeStatus.electron && (
             <div className="tiny" style={{ marginTop: 6, color: 'var(--text-3)' }}>
-              <Icon name="alert" className="ic" size={13} /> MediaCrawler 代理未启动，登录与真实搜索不可用。请确认 .workbuddy/binaries/python/envs/media-crawler 存在且 server.py 可运行。
+              <Icon name="alert" className="ic" size={13} /> 抓取服务暂未启动，登录与真实搜索暂不可用。请先完成“本机运行环境”安装，随后重试。
             </div>
           )}
         </div>

@@ -28,6 +28,29 @@ function hasChromium(): boolean {
   }
 }
 
+/**
+ * 优先复用用户电脑已安装的 Chrome / Edge，避免首次运行强制下载数百 MB 的
+ * Playwright Chromium。两个浏览器都基于 Chromium，Playwright 可以直接驱动。
+ */
+function systemBrowserPath(): string | null {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const candidates = process.platform === 'darwin'
+    ? [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ]
+    : process.platform === 'win32'
+      ? [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      ]
+      : [];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
 function runtimeFiles(root: string | null) {
   if (!root) return { media: false, wechat: false };
   return {
@@ -54,14 +77,16 @@ export async function runtimeSetupStatus(): Promise<RuntimeSetupStatus> {
   const root = await bundledRuntimeRoot();
   const files = runtimeFiles(root);
   const browser = hasChromium();
-  const ready = files.media && files.wechat && browser;
+  const systemBrowser = systemBrowserPath();
+  const browserReady = browser || !!systemBrowser;
+  const ready = files.media && files.wechat && browserReady;
   return {
     packaged, ready, installing: !!installProcess, phase,
     message: installProcess ? message : ready ? '抓取与下载环境已就绪。' : '首次使用需要下载本机运行环境（约 0.8–1.5 GB，取决于系统与网络）。',
     components: [
       { id: 'media', label: '内容抓取环境', ready: files.media, detail: files.media ? '已安装' : '待安装' },
       { id: 'wechat', label: '本地下载工具', ready: files.wechat, detail: files.wechat ? '已安装' : '待安装' },
-      { id: 'browser', label: 'Chromium 浏览器运行时', ready: browser, detail: browser ? '已安装' : '待下载' },
+      { id: 'browser', label: '浏览器运行时', ready: browserReady, detail: browser ? 'Playwright Chromium 已安装' : systemBrowser ? '复用本机 Chrome / Edge' : '待下载' },
     ],
   };
 }
@@ -117,8 +142,25 @@ async function installRuntime(): Promise<void> {
   await run(uv, ['venv', '--python', '3.12', wechatVenv]);
   await run(uv, ['pip', 'install', '--python', pythonExecutable(wechatVenv), '-r', path.join(installRoot, 'wechat-mp-tools', 'requirements.txt')], { env: browserEnv });
 
-  phase = '下载 Chromium'; message = '正在下载 Chromium 浏览器运行时，请保持网络连接…';
-  await run(pythonExecutable(mediaVenv), ['-m', 'playwright', 'install', 'chromium'], { env: browserEnv });
+  const existingBrowser = systemBrowserPath();
+  if (existingBrowser) {
+    phase = '复用本机浏览器'; message = '已检测到本机 Chrome / Edge，无需下载 Chromium。';
+  } else {
+    phase = '下载 Chromium'; message = '未检测到 Chrome / Edge，正在从国内镜像下载 Chromium 浏览器运行时…';
+    try {
+      await run(pythonExecutable(mediaVenv), ['-m', 'playwright', 'install', 'chromium'], {
+        env: { ...browserEnv, PLAYWRIGHT_DOWNLOAD_HOST: 'https://registry.npmmirror.com/-/binary/playwright' },
+      });
+    } catch (mirrorError) {
+      phase = '重试下载 Chromium'; message = '国内镜像下载未完成，正在尝试备用下载源…';
+      try {
+        await run(pythonExecutable(mediaVenv), ['-m', 'playwright', 'install', 'chromium'], { env: browserEnv });
+      } catch (fallbackError: any) {
+        const detail = fallbackError?.message || (mirrorError as Error)?.message || '网络连接异常';
+        throw new Error(`浏览器运行时下载失败。建议先安装 Google Chrome 或 Microsoft Edge 后重新打开工作台；如需继续下载，请检查网络或代理后重试。${detail ? `\n${detail}` : ''}`);
+      }
+    }
+  }
   phase = '已完成'; message = '环境安装完成，可以继续登录抖音和小红书。';
 }
 

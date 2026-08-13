@@ -31,6 +31,10 @@ def _env_bool(name: str, default: str) -> bool:
 # MC_HEADLESS 默认 "0" —— 有头。小红书对无头浏览器风控极严（error_code=300012）。
 HEADLESS = _env_bool("MC_HEADLESS", "0")
 
+# 首次环境优先复用用户已安装的 Chrome / Edge，避免在国内网络环境额外下载
+# Playwright Chromium。未传入时仍按 Playwright 默认浏览器运行，兼容旧安装。
+BROWSER_EXECUTABLE_PATH = os.environ.get("MC_BROWSER_EXECUTABLE_PATH", "").strip()
+
 # 数据根目录：Electron 会通过环境变量传入 userData 目录，独立跑时落在本目录下。
 DATA_DIR = Path(
     os.environ.get("MC_DATA_DIR") or (Path(__file__).parent / ".mc-data")
@@ -175,7 +179,7 @@ class BrowserManager:
 
             pw = await self._playwright()
             use_headless = HEADLESS if headless is None else headless
-            ctx = await pw.chromium.launch_persistent_context(
+            launch_options = dict(
                 user_data_dir=str(profile_dir(platform)),
                 headless=use_headless,
                 args=LAUNCH_ARGS,
@@ -185,6 +189,9 @@ class BrowserManager:
                 timezone_id="Asia/Shanghai",
                 ignore_default_args=["--enable-automation"],
             )
+            if BROWSER_EXECUTABLE_PATH and Path(BROWSER_EXECUTABLE_PATH).is_file():
+                launch_options["executable_path"] = BROWSER_EXECUTABLE_PATH
+            ctx = await pw.chromium.launch_persistent_context(**launch_options)
             await ctx.add_init_script(STEALTH_JS)
             ctx.on("close", lambda _c=None: self._contexts.pop(platform.key, None))
             self._contexts[platform.key] = ctx

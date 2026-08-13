@@ -180,7 +180,7 @@ export default function Xuanti() {
               </div>
             )}
             <div className="hot-grid" style={hotRanks.loading && !Object.keys(hot).length ? { opacity: 0.55 } : undefined}>
-              {(Object.keys(hot).length ? Object.keys(hot) : HOT_PLATFORMS).map((p) => {
+              {HOT_PLATFORMS.map((p) => {
                 const items = hot[p] || [];
                 return (
                   <div className="hot-col" key={p}>
@@ -193,7 +193,7 @@ export default function Xuanti() {
                         [0, 1, 2].map((idx) => (
                           <div key={idx} className="skeleton sk-line" style={{ width: '90%', margin: '8px 6px' }} />
                         ))
-                      ) : (
+                      ) : items.length ? (
                         items.slice(0, 20).map((it, i) => (
                           <div className="hot-item" key={i}>
                             <span className={`rank ${i < 3 ? 'top' : ''}`}>{i + 1}</span>
@@ -220,6 +220,8 @@ export default function Xuanti() {
                             </Button>
                           </div>
                         ))
+                      ) : (
+                        <div className="tiny" style={{ padding: '16px 8px', color: 'var(--text-3)' }}>暂未获取到该平台热榜，可稍后重试。</div>
                       )}
                     </div>
                   </div>

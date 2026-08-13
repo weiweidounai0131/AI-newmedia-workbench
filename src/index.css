@@ -384,9 +384,12 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .set-status.ok{color:var(--accent-ink)}
 .set-status.no{color:var(--text-3)}
 /* 抓取账号：平台行用浅灰底色卡片化，打破底部大白块 */
-.scrape-row{background:var(--surface-2);border-bottom:none !important;border-radius:var(--radius-sm);padding:12px 14px;margin:6px 0}
+.scrape-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;justify-content:initial;background:var(--surface-2);border-bottom:none !important;border-radius:var(--radius-sm);padding:12px 14px;margin:6px 0}
+.scrape-row .set-status{min-width:72px;justify-content:flex-end;white-space:nowrap}
+.scrape-row .heroui-button{min-width:104px;justify-content:center}
 .scrape-row:first-child{margin-top:0}
 .scrape-row:last-child{margin-bottom:0}
+@media(max-width:620px){.scrape-row{grid-template-columns:1fr auto}.scrape-row .s-main{grid-column:1/-1;margin-bottom:4px}.scrape-row .heroui-button{min-width:92px}}
 
 /* 设置页 · AI 模型（按能力分层） */
 .cap-note{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--text-2);background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:4px}

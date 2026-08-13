@@ -30,6 +30,25 @@ const PROXY_BASE = `http://${PROXY_HOST}:${PROXY_PORT}`;
 let proc: ChildProcess | null = null;
 let procStarted = false;
 
+function systemBrowserPath(): string | undefined {
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  const candidates = process.platform === 'darwin'
+    ? [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ]
+    : process.platform === 'win32'
+      ? [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      ]
+      : [];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
 // ----------------------------------------------------------------
 // electron 运行时探测（仅为可选增强；非 Electron 环境下全部走回退逻辑）
 // ----------------------------------------------------------------
@@ -174,6 +193,7 @@ export async function startMediaCrawler(): Promise<void> {
         MC_DOUYIN_PROFILE_DIR: path.join(runtimeData, 'douyin-profile'),
         MC_HEADLESS: process.env.MC_HEADLESS ?? '0',
         PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(),
+        ...(systemBrowserPath() ? { MC_BROWSER_EXECUTABLE_PATH: systemBrowserPath() } : {}),
       },
       detached: false,
       stdio: ['ignore', out, err],

@@ -131,7 +131,7 @@ export default function Home() {
             {hotRanks.loading ? (
               <div className="home-hot-state"><Spinner size="sm" /> 正在加载当日热点…</div>
             ) : Object.keys(hotRanks.items).length ? (
-              Object.keys(hotRanks.items).map((p) => (
+              ['抖音', '小红书', '微博', '知乎'].map((p) => (
                   <div className="th-col" key={p}>
                     <div className="th-head">
                       <span className="plat-dot" style={{ background: PLAT_COLORS[p] }} />
@@ -139,13 +139,13 @@ export default function Home() {
                       <span className="tiny">TOP 3</span>
                     </div>
                     <div className="th-list">
-                      {hotRanks.items[p].slice(0, 3).map((it, i) => (
+                      {(hotRanks.items[p] || []).length ? (hotRanks.items[p] || []).slice(0, 3).map((it, i) => (
                         <div className="th-item" key={i}>
                           <span className={`th-rank${i === 0 ? ' top' : ''}`}>{i + 1}</span>
                           <span className="th-title" title={it.t}>{it.t}</span>
                           <span className="th-heat tiny">{it.heat}</span>
                         </div>
-                      ))}
+                      )) : <div className="tiny" style={{ padding: '10px 0', color: 'var(--text-3)' }}>暂未获取</div>}
                     </div>
                   </div>
                 ))

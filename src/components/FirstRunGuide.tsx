@@ -46,7 +46,7 @@ export function FirstRunGuide({ open, onFinish }: { open: boolean; onFinish: () 
     <ModalHeader>首次使用引导</ModalHeader>
     <ModalBody>
       <div className="onboarding-intro">先完成本机运行环境与平台登录设置。所有数据和 Cookie 仅保存在这台电脑。</div>
-      <section className="onboarding-step"><div className="onboarding-title"><span className={`onboarding-number ${ready ? 'done' : ''}`}>{ready ? '✓' : '1'}</span><div><b>本机环境</b><small>{runtime?.message || '正在检查…'}</small></div></div>
+      <section className="onboarding-step"><div className="onboarding-title"><span className={`onboarding-number ${ready ? 'done' : ''}`}>{ready ? '✓' : '1'}</span><div><b>本机环境</b><small>{runtime?.message || '正在检查…'} 优先复用本机 Chrome / Edge，未检测到时才下载浏览器运行时。</small></div></div>
         <div className="onboarding-components">{(runtime?.components || []).map((item) => <span key={item.id} className={`onboarding-chip ${item.ready ? 'ready' : ''}`}>{item.ready ? '✓' : '•'} {item.label} · {item.detail}</span>)}</div>
         {!ready && <Button color="primary" size="sm" isLoading={installing || !!runtime?.installing} onPress={install}>安装本机环境</Button>}
       </section>
