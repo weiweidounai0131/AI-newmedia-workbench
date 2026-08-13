@@ -21,10 +21,19 @@ let updateCheckInFlight: Promise<UpdateCheckResult> | null = null;
 let notifyNoUpdate = false;
 let updateStatus: UpdateStatus = { phase: 'idle', percent: 0 };
 let macUpdateInstallStarted = false;
+let activeUpdateSource: ResolvedUpdateSource | null = null;
+let fallbackDownloadPending = false;
+let fallbackDownloadAttempted = false;
 
 const LEGACY_MAC_UPDATE_JOB_PREFIX = 'com.newmedia.workbench.update.';
 
-type UpdateSource = { provider?: string; url?: string };
+type UpdateSource = { provider?: string; url?: string; fallbackUrl?: string; timeoutMs?: number };
+type ResolvedUpdateSource = {
+  primaryUrl: string;
+  fallbackUrl?: string;
+  timeoutMs: number;
+  activeUrl: string;
+};
 type UpdateCheckResult = { ok: boolean; reason?: 'not-packaged' | 'not-configured' | 'checking' | 'failed' };
 type UpdateStatus = {
   phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
@@ -103,10 +112,10 @@ async function installMacUpdate(): Promise<void> {
 }
 
 /**
- * 更新包地址是公开读取地址，不是上传密钥。它单独留在 resources/update-source.json，
- * 因而同一套私有源码可以分别发布到不同的 R2/CDN 目录。
+ * 更新包地址是公开读取地址，不是上传密钥。Cloudflare 为优先节点，国内 OSS 为
+ * 自动兜底节点；两端必须发布同一批 latest*.yml、安装包和 blockmap。
  */
-async function readUpdateSource(): Promise<string | null> {
+async function readUpdateSource(): Promise<ResolvedUpdateSource | null> {
   const candidates = app.isPackaged
     ? [path.join(process.resourcesPath, 'resources', 'update-source.json')]
     : [path.join(process.cwd(), 'resources', 'update-source.json')];
@@ -117,12 +126,55 @@ async function readUpdateSource(): Promise<string | null> {
       const source = JSON.parse(raw) as UpdateSource;
       if (source.provider && source.provider !== 'generic') continue;
       if (typeof source.url !== 'string' || !/^https:\/\//i.test(source.url)) continue;
-      return source.url.replace(/\/+$/, '');
+      const fallbackUrl = typeof source.fallbackUrl === 'string' && /^https:\/\//i.test(source.fallbackUrl)
+        ? source.fallbackUrl.replace(/\/+$/, '')
+        : undefined;
+      return {
+        primaryUrl: source.url.replace(/\/+$/, ''),
+        fallbackUrl,
+        timeoutMs: Math.min(15_000, Math.max(3_000, Number(source.timeoutMs) || 6_000)),
+        activeUrl: source.url.replace(/\/+$/, ''),
+      };
     } catch {
       // 首次发布前或开发环境未配置更新源时，自动更新安静跳过。
     }
   }
   return null;
+}
+
+function updateManifestName(): string {
+  return process.platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml';
+}
+
+/** 在真正交给 electron-updater 前快速探测更新清单，避免国内网络长时间卡在 Cloudflare。 */
+async function sourceReachable(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/${updateManifestName()}`, {
+      method: 'HEAD', signal: controller.signal, redirect: 'follow', cache: 'no-store',
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function selectUpdateSource(source: ResolvedUpdateSource): Promise<ResolvedUpdateSource> {
+  if (await sourceReachable(source.primaryUrl, source.timeoutMs)) return source;
+  if (source.fallbackUrl && await sourceReachable(source.fallbackUrl, source.timeoutMs)) {
+    console.info('[updater] Cloudflare 更新节点不可用，已自动切换国内更新节点');
+    return { ...source, activeUrl: source.fallbackUrl };
+  }
+  // 两端探测都异常时仍交给优先节点尝试，electron-updater 会保留具体错误日志。
+  return source;
+}
+
+function useUpdateSource(source: ResolvedUpdateSource, url = source.activeUrl): void {
+  activeUpdateSource = { ...source, activeUrl: url };
+  autoUpdater.setFeedURL({ provider: 'generic', url });
 }
 
 function bindUpdateEvents(): void {
@@ -132,6 +184,15 @@ function bindUpdateEvents(): void {
   autoUpdater.on('update-available', async (info) => {
     notifyNoUpdate = false;
     publishUpdateStatus({ phase: 'available', percent: 0, version: info.version });
+    if (fallbackDownloadPending) {
+      fallbackDownloadPending = false;
+      publishUpdateStatus({ phase: 'downloading', percent: 0, version: info.version, message: '已切换国内节点，继续下载更新…' });
+      void autoUpdater.downloadUpdate().catch((error) => {
+        publishUpdateStatus({ phase: 'error', percent: 0, version: info.version, message: '更新下载失败，请稍后重试。' });
+        console.warn('[updater] 国内节点下载更新失败：', error);
+      });
+      return;
+    }
     const options: MessageBoxOptions = {
       type: 'info',
       title: '发现新版本',
@@ -207,6 +268,19 @@ function bindUpdateEvents(): void {
     notifyNoUpdate = false;
     // 更新服务不可用不能影响主流程；详细原因仅写入主进程日志，避免打扰用户。
     console.warn('[updater] 自动更新检查失败：', error);
+    if (updateStatus.phase === 'downloading' && activeUpdateSource?.fallbackUrl &&
+      activeUpdateSource.activeUrl !== activeUpdateSource.fallbackUrl && !fallbackDownloadAttempted) {
+      fallbackDownloadAttempted = true;
+      fallbackDownloadPending = true;
+      publishUpdateStatus({ phase: 'downloading', percent: 0, message: 'Cloudflare 下载异常，正在切换国内节点…' });
+      useUpdateSource(activeUpdateSource, activeUpdateSource.fallbackUrl);
+      void autoUpdater.checkForUpdates().catch((retryError) => {
+        fallbackDownloadPending = false;
+        publishUpdateStatus({ phase: 'error', percent: 0, message: '更新下载失败，请稍后重试。' });
+        console.warn('[updater] 国内节点重试失败：', retryError);
+      });
+      return;
+    }
     if (updateStatus.phase === 'downloading') publishUpdateStatus({ phase: 'error', percent: 0, message: '更新下载失败，请稍后重试。' });
   });
 }
@@ -216,8 +290,8 @@ async function checkForUpdates(manual = false): Promise<UpdateCheckResult> {
   if (!manual && updateCheckStarted) return { ok: true };
   if (updateCheckInFlight) return { ok: false, reason: 'checking' };
   updateCheckStarted = true;
-  const url = await readUpdateSource();
-  if (!url) {
+  const source = await readUpdateSource();
+  if (!source) {
     console.info('[updater] 未配置更新源，本次跳过版本检查');
     return { ok: false, reason: 'not-configured' };
   }
@@ -225,7 +299,9 @@ async function checkForUpdates(manual = false): Promise<UpdateCheckResult> {
   bindUpdateEvents();
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.setFeedURL({ provider: 'generic', url });
+  const selectedSource = await selectUpdateSource(source);
+  useUpdateSource(selectedSource);
+  fallbackDownloadAttempted = false;
   notifyNoUpdate = manual;
   updateCheckInFlight = autoUpdater.checkForUpdates()
     .then(() => ({ ok: true }))

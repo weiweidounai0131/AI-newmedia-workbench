@@ -19,6 +19,10 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: 'true'
+      ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+      ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
+      ALIYUN_OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+      ALIYUN_OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
       # 内部开发者版不使用 Apple Developer ID；由 afterPack 生成可验证的临时签名。
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -36,8 +40,9 @@ jobs:
 
       - name: Configure update source
         run: |
-          test -n "$UPDATE_SERVER_URL"
-          printf '{\n  "provider": "generic",\n  "url": "%s"\n}\n' "$UPDATE_SERVER_URL" > resources/update-source.json
+          test -n "$UPDATE_SERVER_URL" && test -n "$ALIYUN_OSS_BUCKET" && test -n "$ALIYUN_OSS_REGION"
+          oss_url="https://${ALIYUN_OSS_BUCKET}.${ALIYUN_OSS_REGION}.aliyuncs.com"
+          printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
 
       - name: Build macOS package
         run: npm run dist:mac
@@ -45,6 +50,7 @@ jobs:
       - name: Publish macOS updater files
         run: |
           test -n "$R2_ACCOUNT_ID" && test -n "$R2_BUCKET" && test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$ALIYUN_OSS_BUCKET" && test -n "$ALIYUN_OSS_REGION" && test -n "$ALIYUN_OSS_ACCESS_KEY_ID" && test -n "$ALIYUN_OSS_ACCESS_KEY_SECRET"
           mac_path="$(awk '/^path:/{print $2; exit}' dist/latest-mac.yml)"
           mac_zip="$(find dist -maxdepth 1 -type f -name '*.zip' | head -n 1)"
           mac_dmg="$(find dist -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
@@ -60,3 +66,11 @@ jobs:
             aws s3 cp "$file" "s3://$R2_BUCKET/$(basename "$file")" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
           done
           aws s3 cp updater-files/latest-mac.yml "s3://$R2_BUCKET/latest-mac.yml" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
+          export AWS_ACCESS_KEY_ID="$ALIYUN_OSS_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$ALIYUN_OSS_ACCESS_KEY_SECRET"
+          export AWS_DEFAULT_REGION="$ALIYUN_OSS_REGION"
+          for file in updater-files/*; do
+            [ "${file##*.}" = 'yml' ] && continue
+            aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress
+          done
+          aws s3 cp updater-files/latest-mac.yml "s3://$ALIYUN_OSS_BUCKET/latest-mac.yml" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress

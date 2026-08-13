@@ -1,4 +1,6 @@
 {
   "provider": "generic",
-  "url": "https://updates.example.com/ai-newmedia-workbench"
+  "url": "https://updates.example.com/ai-newmedia-workbench",
+  "fallbackUrl": "https://updates-cn.example.com/ai-newmedia-workbench",
+  "timeoutMs": 6000
 }
