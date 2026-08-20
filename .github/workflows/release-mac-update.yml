@@ -69,9 +69,19 @@ jobs:
           aws s3 cp updater-files/latest-mac.yml "s3://$R2_BUCKET/latest-mac.yml" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
           export AWS_ACCESS_KEY_ID="$ALIYUN_OSS_ACCESS_KEY_ID"
           export AWS_SECRET_ACCESS_KEY="$ALIYUN_OSS_ACCESS_KEY_SECRET"
-          export AWS_DEFAULT_REGION="$ALIYUN_OSS_REGION"
           oss_region="${ALIYUN_OSS_REGION#oss-}"
           oss_endpoint="https://oss-${oss_region}.aliyuncs.com"
+          # OSS only accepts virtual-hosted-style requests.  Without this,
+          # AWS CLI sends path-style requests and OSS returns
+          # SecondLevelDomainForbidden.
+          aws_config_file="$RUNNER_TEMP/aws-oss-config"
+          cat > "$aws_config_file" <<'EOF'
+          [default]
+          s3 =
+              addressing_style = virtual
+          EOF
+          export AWS_CONFIG_FILE="$aws_config_file"
+          export AWS_DEFAULT_REGION="$oss_region"
           for file in updater-files/*; do
             [ "${file##*.}" = 'yml' ] && continue
             aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "$oss_endpoint" --no-progress
