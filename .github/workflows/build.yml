@@ -244,6 +244,8 @@ jobs:
           aws_config_file="$RUNNER_TEMP/aws-oss-config"
           cat > "$aws_config_file" <<'EOF'
           [default]
+          request_checksum_calculation = when_required
+          response_checksum_validation = when_required
           s3 =
               addressing_style = virtual
           EOF
