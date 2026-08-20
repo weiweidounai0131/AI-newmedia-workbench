@@ -41,7 +41,8 @@ jobs:
       - name: Configure update source
         run: |
           test -n "$UPDATE_SERVER_URL" && test -n "$ALIYUN_OSS_BUCKET" && test -n "$ALIYUN_OSS_REGION"
-          oss_url="https://${ALIYUN_OSS_BUCKET}.${ALIYUN_OSS_REGION}.aliyuncs.com"
+          oss_region="${ALIYUN_OSS_REGION#oss-}"
+          oss_url="https://${ALIYUN_OSS_BUCKET}.oss-${oss_region}.aliyuncs.com"
           printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
 
       - name: Build macOS package
@@ -69,8 +70,10 @@ jobs:
           export AWS_ACCESS_KEY_ID="$ALIYUN_OSS_ACCESS_KEY_ID"
           export AWS_SECRET_ACCESS_KEY="$ALIYUN_OSS_ACCESS_KEY_SECRET"
           export AWS_DEFAULT_REGION="$ALIYUN_OSS_REGION"
+          oss_region="${ALIYUN_OSS_REGION#oss-}"
+          oss_endpoint="https://oss-${oss_region}.aliyuncs.com"
           for file in updater-files/*; do
             [ "${file##*.}" = 'yml' ] && continue
-            aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress
+            aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "$oss_endpoint" --no-progress
           done
-          aws s3 cp updater-files/latest-mac.yml "s3://$ALIYUN_OSS_BUCKET/latest-mac.yml" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress
+          aws s3 cp updater-files/latest-mac.yml "s3://$ALIYUN_OSS_BUCKET/latest-mac.yml" --endpoint-url "$oss_endpoint" --no-progress

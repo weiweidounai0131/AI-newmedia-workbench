@@ -9,7 +9,7 @@
 3. 在 GitHub 私有仓库的 Actions Secrets 中保存下列值：
    - `UPDATE_SERVER_URL`：Cloudflare 公开读取地址。
    - `R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`：R2 上传凭据与桶名。
-   - `ALIYUN_OSS_ACCESS_KEY_ID`、`ALIYUN_OSS_ACCESS_KEY_SECRET`、`ALIYUN_OSS_BUCKET`、`ALIYUN_OSS_REGION`：OSS 发布专用 RAM 用户凭据、桶名和地域。
+   - `ALIYUN_OSS_ACCESS_KEY_ID`、`ALIYUN_OSS_ACCESS_KEY_SECRET`、`ALIYUN_OSS_BUCKET`、`ALIYUN_OSS_REGION`：OSS 发布专用 RAM 用户凭据、桶名和地域。地域可填 `cn-guangzhou` 或 `oss-cn-guangzhou`，工作流会自动规范化。
    建议两个发布账号均只拥有对应更新桶的最小权限。
 
 ## 每次发布
