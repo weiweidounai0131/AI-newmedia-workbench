@@ -151,7 +151,9 @@ jobs:
     name: Publish incremental updates to R2 and OSS
     needs: [build-mac, build-win]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # 标签发布和手动从 main 发布都允许同步更新节点；手动发布用于修复发布配置后
+    # 不改写已经存在的版本标签。
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/download-artifact@v4
         with:
