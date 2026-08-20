@@ -22,6 +22,8 @@ jobs:
     runs-on: macos-latest
     env:
       UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+      ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+      ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
       APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
     steps:
       - uses: actions/checkout@v4
@@ -45,9 +47,10 @@ jobs:
           echo "macOS icon OK"
 
       - name: Configure update source
-        if: ${{ env.UPDATE_SERVER_URL != '' }}
+        if: ${{ env.UPDATE_SERVER_URL != '' && env.ALIYUN_OSS_BUCKET != '' && env.ALIYUN_OSS_REGION != '' }}
         run: |
-          printf '{\n  "provider": "generic",\n  "url": "%s"\n}\n' "$UPDATE_SERVER_URL" > resources/update-source.json
+          oss_url="https://${ALIYUN_OSS_BUCKET}.${ALIYUN_OSS_REGION}.aliyuncs.com"
+          printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
 
       - name: Import Apple codesign certificate
         if: ${{ env.APPLE_CERT_BASE64 != '' }}
@@ -89,6 +92,8 @@ jobs:
     runs-on: windows-latest
     env:
       UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+      ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+      ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,12 +117,13 @@ jobs:
           Write-Host "Windows icon OK"
 
       - name: Configure update source
-        if: ${{ env.UPDATE_SERVER_URL != '' }}
+        if: ${{ env.UPDATE_SERVER_URL != '' && env.ALIYUN_OSS_BUCKET != '' && env.ALIYUN_OSS_REGION != '' }}
         shell: bash
         env:
           UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
         run: |
-          printf '{\n  "provider": "generic",\n  "url": "%s"\n}\n' "$UPDATE_SERVER_URL" > resources/update-source.json
+          oss_url="https://${ALIYUN_OSS_BUCKET}.${ALIYUN_OSS_REGION}.aliyuncs.com"
+          printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
 
       - name: Build & sign Windows
         run: npm run dist:win
@@ -138,7 +144,7 @@ jobs:
           if-no-files-found: error
 
   publish-updates:
-    name: Publish incremental updates to R2
+    name: Publish incremental updates to R2 and OSS
     needs: [build-mac, build-win]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
@@ -160,6 +166,21 @@ jobs:
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "R2 secrets are not configured; skip incremental update upload."
+          fi
+
+      - name: Check OSS configuration
+        id: oss_config
+        env:
+          ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+          ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
+          ALIYUN_OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+          ALIYUN_OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+        run: |
+          if [ -n "$ALIYUN_OSS_BUCKET" ] && [ -n "$ALIYUN_OSS_REGION" ] && [ -n "$ALIYUN_OSS_ACCESS_KEY_ID" ] && [ -n "$ALIYUN_OSS_ACCESS_KEY_SECRET" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Aliyun OSS secrets are not configured; skip domestic update upload."
           fi
 
       - name: Upload updater files
@@ -197,6 +218,37 @@ jobs:
             aws s3 cp "$file" "s3://$R2_BUCKET/$(basename "$file")" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
           done
           aws s3 ls "s3://$R2_BUCKET/" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+
+      - name: Upload updater files to OSS
+        if: steps.oss_config.outputs.enabled == 'true'
+        env:
+          ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+          ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          mkdir -p updater-files
+          mac_path="$(awk '/^path:/{print $2; exit}' artifacts/mac/latest-mac.yml)"
+          win_path="$(awk '/^path:/{print $2; exit}' artifacts/win/latest.yml)"
+          mac_zip="$(find artifacts/mac -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          win_exe="$(find artifacts/win -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+          test -n "$mac_path" && test -f "$mac_zip"
+          test -n "$win_path" && test -f "$win_exe"
+          cp "$mac_zip" "updater-files/$mac_path"
+          cp "$mac_zip.blockmap" "updater-files/$mac_path.blockmap"
+          cp "$win_exe" "updater-files/$win_path"
+          cp "$win_exe.blockmap" "updater-files/$win_path.blockmap"
+          cp artifacts/mac/latest-mac.yml updater-files/latest-mac.yml
+          cp artifacts/win/latest.yml updater-files/latest.yml
+          for file in updater-files/*; do
+            [ "${file##*.}" = 'yml' ] && continue
+            aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress
+          done
+          for file in updater-files/*.yml; do
+            aws s3 cp "$file" "s3://$ALIYUN_OSS_BUCKET/$(basename "$file")" --endpoint-url "https://$ALIYUN_OSS_REGION.aliyuncs.com" --no-progress
+          done
 
   release:
     name: Draft GitHub Release
