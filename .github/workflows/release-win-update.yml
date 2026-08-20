@@ -1,0 +1,94 @@
+# Windows 单端增量更新：不使用 GitHub Actions 临时制品，直接构建并上传两个更新节点。
+name: Release Windows Update
+
+on:
+  push:
+    tags:
+      - 'win-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish-win:
+    name: Build and publish Windows update
+    runs-on: windows-latest
+    env:
+      UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: 'true'
+      ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+      ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
+      ALIYUN_OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+      ALIYUN_OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Verify Windows icon
+        shell: bash
+        run: test -f resources/icon.ico
+
+      - name: Configure update source
+        shell: bash
+        run: |
+          test -n "$UPDATE_SERVER_URL" && test -n "$ALIYUN_OSS_BUCKET" && test -n "$ALIYUN_OSS_REGION"
+          oss_region="${ALIYUN_OSS_REGION#oss-}"
+          oss_url="https://${ALIYUN_OSS_BUCKET}.oss-${oss_region}.aliyuncs.com"
+          printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
+
+      - name: Build Windows package
+        run: npm run dist:win
+
+      - name: Publish Windows updater files
+        shell: bash
+        run: |
+          test -n "$R2_ACCOUNT_ID" && test -n "$R2_BUCKET" && test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$ALIYUN_OSS_BUCKET" && test -n "$ALIYUN_OSS_REGION" && test -n "$ALIYUN_OSS_ACCESS_KEY_ID" && test -n "$ALIYUN_OSS_ACCESS_KEY_SECRET"
+          win_path="$(awk '/^path:/{print $2; exit}' dist/latest.yml)"
+          win_exe="$(find dist -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+          test -n "$win_path" && test -f "$win_exe" && test -f "$win_exe.blockmap"
+          mkdir -p updater-files
+          cp "$win_exe" "updater-files/$win_path"
+          cp "$win_exe.blockmap" "updater-files/$win_path.blockmap"
+          cp dist/latest.yml updater-files/latest.yml
+
+          # 先传入 Cloudflare R2，latest.yml 最后上传。
+          aws s3 cp "updater-files/$win_path" "s3://$R2_BUCKET/$win_path" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
+          aws s3 cp "updater-files/$win_path.blockmap" "s3://$R2_BUCKET/$win_path.blockmap" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
+          aws s3 cp updater-files/latest.yml "s3://$R2_BUCKET/latest.yml" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --no-progress
+
+          # 阿里云 OSS 使用虚拟主机式访问，并关闭 OSS 不支持的 AWS 尾部校验。
+          export AWS_ACCESS_KEY_ID="$ALIYUN_OSS_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$ALIYUN_OSS_ACCESS_KEY_SECRET"
+          oss_region="${ALIYUN_OSS_REGION#oss-}"
+          oss_endpoint="https://oss-${oss_region}.aliyuncs.com"
+          aws_config_file="$RUNNER_TEMP/aws-oss-config"
+          cat > "$aws_config_file" <<'EOF'
+          [default]
+          request_checksum_calculation = when_required
+          response_checksum_validation = when_required
+          s3 =
+              addressing_style = virtual
+          EOF
+          export AWS_CONFIG_FILE="$aws_config_file"
+          export AWS_DEFAULT_REGION="$oss_region"
+          aws s3 cp "updater-files/$win_path" "s3://$ALIYUN_OSS_BUCKET/$win_path" --endpoint-url "$oss_endpoint" --no-progress
+          aws s3 cp "updater-files/$win_path.blockmap" "s3://$ALIYUN_OSS_BUCKET/$win_path.blockmap" --endpoint-url "$oss_endpoint" --no-progress
+          aws s3 cp updater-files/latest.yml "s3://$ALIYUN_OSS_BUCKET/latest.yml" --endpoint-url "$oss_endpoint" --no-progress
