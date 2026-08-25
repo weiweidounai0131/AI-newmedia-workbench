@@ -192,6 +192,23 @@ interface AcquiredSource {
   feedback: SourceFeedback;
 }
 
+/**
+ * 返回链接检查阶段保存的非敏感来源摘要。
+ * MCP 工作流需要把可读文字交给网页端模型，但不能暴露本机文件路径、Cookie
+ * 或浏览器 profile；图片/视频只返回数量和状态，二进制仍留在本机识别链路。
+ */
+export interface SourceSnapshot {
+  sourceId: string;
+  mediaType: MediaType;
+  platform?: string;
+  title?: string;
+  description?: string;
+  text?: string;
+  fileCount: number;
+  hasLocalMedia: boolean;
+  feedback: SourceFeedback;
+}
+
 const sourceCache = new Map<string, AcquiredSource>();
 
 function rememberSource(source: Omit<AcquiredSource, 'id'>): AcquiredSource {
@@ -375,6 +392,27 @@ export async function recognizeLink(input: string, platform?: string): Promise<R
     });
     return { mediaType: 'video', recog: '', title: extracted.title || undefined, sourceId: source.id, feedback: source.feedback };
   }
+}
+
+/** 读取链接检查阶段的内存来源摘要；服务重启后 sourceId 会自然失效。 */
+export function sourceSnapshot(sourceId: string): SourceSnapshot | null {
+  const source = sourceCache.get(sourceId);
+  if (!source) return null;
+  const rawText = [source.title && `标题：${source.title}`, source.text || source.desc ? `正文：${source.text || source.desc}` : '']
+    .filter(Boolean)
+    .join('\n');
+  const text = rawText.length > 100_000 ? `${rawText.slice(0, 100_000)}\n（正文过长，已截断）` : rawText;
+  return {
+    sourceId,
+    mediaType: source.mediaType,
+    platform: source.platform,
+    title: source.title,
+    description: source.desc,
+    text: text || undefined,
+    fileCount: source.files.length,
+    hasLocalMedia: source.files.length > 0 || Boolean(source.parts?.length),
+    feedback: source.feedback,
+  };
 }
 
 /** 第二阶段：只有用户确认来源检查通过后，才进入视觉/文字识别。 */

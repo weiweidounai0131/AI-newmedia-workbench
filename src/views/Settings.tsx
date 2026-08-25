@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Button, Input, Select, SelectItem, Chip, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
 import { CAP_SLOTS, type CapId } from '../../electron/main/server/services/caps';
 import { useApp, setSettings, setView } from '../store/appStore';
-import { api, type UpdateStatus } from '../api/client';
+import { api, getApiBase, type UpdateStatus } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
@@ -41,6 +41,8 @@ export default function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
   const [appVersion, setAppVersion] = useState('');
+  const [mcpEndpoint, setMcpEndpoint] = useState('');
+  const [mcpOnline, setMcpOnline] = useState<boolean | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -58,6 +60,37 @@ export default function Settings() {
     void api.getAppVersion().then((version) => { if (active) setAppVersion(version); });
     return () => { active = false; };
   }, []);
+
+  // MCP 是工作台的备用入口；这里仅显示本机地址和健康状态，不把 Key 或认证信息暴露到前端。
+  useEffect(() => {
+    let active = true;
+    const refreshMcp = async () => {
+      try {
+        const base = await getApiBase();
+        const endpoint = `${base}/mcp`;
+        const response = await fetch(`${endpoint}/health`, { cache: 'no-store' });
+        if (active) {
+          setMcpEndpoint(endpoint);
+          setMcpOnline(response.ok);
+        }
+      } catch {
+        if (active) setMcpOnline(false);
+      }
+    };
+    void refreshMcp();
+    const timer = window.setInterval(refreshMcp, 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+
+  async function copyMcpEndpoint() {
+    if (!mcpEndpoint) return toast('MCP 地址尚未准备好，请稍候', 'warning');
+    try {
+      await navigator.clipboard.writeText(mcpEndpoint);
+      toast('MCP 本机地址已复制', 'success');
+    } catch {
+      toast('复制失败，请手动选中地址复制', 'warning');
+    }
+  }
 
   // 拉取各平台抓取登录态
   useEffect(() => {
@@ -377,6 +410,35 @@ export default function Settings() {
             <span className="set-status ok" aria-label="安全调用已启用">
               <Icon name="check" className="ic" size={14} /> 已启用
             </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 网页 ChatGPT MCP 备用入口 */}
+      <div className="panel">
+        <div className="panel-head">
+          <h3><Icon name="spark" className="ic" size={18} /> 网页 ChatGPT 连接（MCP）</h3>
+          <div className="spacer" />
+          <span className={`set-status ${mcpOnline ? 'ok' : mcpOnline === false ? 'no' : ''}`}>
+            <Icon name={mcpOnline ? 'check' : 'alert'} className="ic" size={14} />
+            {mcpOnline ? '本机服务已就绪' : mcpOnline === false ? '本机服务未连接' : '检测中'}
+          </span>
+        </div>
+        <div className="panel-body">
+          <div className="set-row" style={{ border: 'none' }}>
+            <div className="s-main">
+              <div className="s-t">MCP 本机地址</div>
+              <div className="s-d">这是工作台提供给网页 ChatGPT 的备用工作流入口。网页端不能直接访问 localhost，需要通过受信任的 HTTPS 隧道转发后再添加连接器。</div>
+              <div className="s-d" style={{ fontFamily: 'var(--mono)', marginTop: 8, wordBreak: 'break-all' }}>
+                {mcpEndpoint || '正在读取本机地址…'}
+              </div>
+            </div>
+            <Button size="sm" variant="bordered" className="topic-outline-button" isDisabled={!mcpEndpoint} onPress={() => void copyMcpEndpoint()}>
+              复制地址
+            </Button>
+          </div>
+          <div className="tiny" style={{ color: 'var(--text-3)' }}>
+            当前最小闭环：网页 ChatGPT 负责校对与改写，工作台负责链接解析、状态门和 Word 导出；不会把 Cookie、API Key 或本机文件路径发送到网页端。
           </div>
         </div>
       </div>

@@ -8,6 +8,7 @@ import { contentRouter } from './routes/content.js';
 import { scrapeRouter } from './routes/scrape.js';
 import { scheduleDailyDownloadCacheCleanup } from './services/downloadCache.js';
 import { hasActiveDownloadTask } from './services/wechatMpTools.js';
+import { mcpRouter } from './routes/mcp.js';
 
 export function createApp(): Express {
   // 解析下载仅作为 AI 识别的临时输入；每天 0 点清空，避免长期积累占满磁盘。
@@ -42,6 +43,8 @@ export function createApp(): Express {
   app.use('/api/library', libraryRouter); // M3 素材库本地直写
   app.use('/api/content', contentRouter); // M3 热榜 / 搜索数据源
   app.use('/api/scrape', scrapeRouter); // M4 抓取：登录态 + 状态
+  // 网页 ChatGPT 的 MCP 备用工作流入口；不替换现有 /api 链路。
+  app.use('/mcp', mcpRouter);
 
   return app;
 }
