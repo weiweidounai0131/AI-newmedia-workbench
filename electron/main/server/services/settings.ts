@@ -98,6 +98,8 @@ interface StoredSettings {
   // 只有后端真实验证成功后才写入；前端切页不会再丢失“已验证”状态。
   verified: Partial<Record<CapId, string>>;
   rootDir?: string; // 导出根目录（方案 C，加密存，见 §5.1）
+  // Secure MCP Tunnel 配置：Tunnel ID 可明文保存，运行密钥必须走同一加密盒。
+  tunnel?: { id?: string; apiKey?: string };
 }
 
 const DEFAULT_SETTINGS: StoredSettings = {
@@ -106,6 +108,7 @@ const DEFAULT_SETTINGS: StoredSettings = {
   suppliers: Object.fromEntries(
     (Object.keys(CAP_SLOTS) as CapId[]).map((c) => [c, CAP_SLOTS[c].defaultModel]),
   ),
+  tunnel: {},
 };
 
 class SettingsStore {
@@ -129,6 +132,7 @@ class SettingsStore {
         suppliers: { ...DEFAULT_SETTINGS.suppliers, ...(raw.suppliers ?? {}) },
         verified: raw.verified ?? {},
         rootDir: raw.rootDir,
+        tunnel: raw.tunnel ?? {},
       };
       // 旧版本的 image 槽位被固定为 gpt-image-1；将这一历史默认值迁移为新版默认。
       if (loaded.suppliers.image === 'gpt-image-1') {
@@ -212,10 +216,50 @@ class SettingsStore {
     this.persist();
   }
 
+  // ---- Secure MCP Tunnel ----
+  get tunnelId(): string | null {
+    const value = this.data.tunnel?.id?.trim();
+    return value || null;
+  }
+
+  get tunnelApiKey(): string | null {
+    const cipher = this.data.tunnel?.apiKey;
+    if (!cipher) return null;
+    try {
+      return this.enc.decrypt(cipher);
+    } catch {
+      return null;
+    }
+  }
+
+  setTunnelConfig(tunnelId: string, apiKey: string): string | null {
+    const id = String(tunnelId || '').trim();
+    const key = String(apiKey || '').trim();
+    if (!id) return 'Tunnel ID 不能为空';
+    if (!/^tunnel_[A-Za-z0-9_-]+$/.test(id)) return 'Tunnel ID 格式不正确，应以 tunnel_ 开头';
+    const existing = key ? null : this.tunnelApiKey;
+    const value = key || existing || '';
+    if (!value) return '运行 API Key 不能为空';
+    if (value.length < 20) return '运行 API Key 长度不足，请粘贴完整密钥';
+    this.data.tunnel = { id, apiKey: key ? this.enc.encrypt(value) : this.data.tunnel?.apiKey };
+    this.persist();
+    return null;
+  }
+
+  clearTunnelConfig(): void {
+    this.data.tunnel = {};
+    this.persist();
+  }
+
   // ---- 对外只读摘要（不含明文 Key） ----
   summary() {
     return {
       rootDir: this.data.rootDir ?? null,
+      mcpTunnel: {
+        configured: !!this.tunnelId && !!this.tunnelApiKey,
+        tunnelId: this.tunnelId,
+        keyConfigured: !!this.tunnelApiKey,
+      },
       suppliers: this.data.suppliers,
       caps: (Object.keys(CAP_SLOTS) as CapId[]).map((cap) => ({
         cap,

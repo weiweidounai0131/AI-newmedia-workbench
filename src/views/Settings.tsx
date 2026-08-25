@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Button, Input, Select, SelectItem, Chip, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
 import { CAP_SLOTS, type CapId } from '../../electron/main/server/services/caps';
 import { useApp, setSettings, setView } from '../store/appStore';
-import { api, getApiBase, type UpdateStatus } from '../api/client';
+import { api, getApiBase, type TunnelClientStatus, type UpdateStatus } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
@@ -43,6 +43,10 @@ export default function Settings() {
   const [appVersion, setAppVersion] = useState('');
   const [mcpEndpoint, setMcpEndpoint] = useState('');
   const [mcpOnline, setMcpOnline] = useState<boolean | null>(null);
+  const [tunnelStatus, setTunnelStatus] = useState<TunnelClientStatus | null>(null);
+  const [tunnelIdInput, setTunnelIdInput] = useState('');
+  const [tunnelKeyInput, setTunnelKeyInput] = useState('');
+  const [tunnelBusy, setTunnelBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -53,6 +57,19 @@ export default function Settings() {
     let active = true;
     void api.getUpdateStatus().then((status) => { if (active) setUpdateStatus(status); });
     return api.onUpdateStatus((status) => { if (active) setUpdateStatus(status); });
+  }, []);
+
+  // Secure MCP Tunnel 是可选备用通道；状态轮询不影响原有 API、抓取和素材库。
+  useEffect(() => {
+    let active = true;
+    const refreshTunnel = () => api.tunnelStatus().then((value) => {
+      if (!active) return;
+      setTunnelStatus(value);
+      setTunnelIdInput((current) => current || value.tunnelId || '');
+    }).catch(() => {});
+    void refreshTunnel();
+    const timer = window.setInterval(refreshTunnel, 3_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
   useEffect(() => {
@@ -89,6 +106,55 @@ export default function Settings() {
       toast('MCP 本机地址已复制', 'success');
     } catch {
       toast('复制失败，请手动选中地址复制', 'warning');
+    }
+  }
+
+  async function saveAndConnectTunnel() {
+    const tunnelId = tunnelIdInput.trim();
+    if (!tunnelId) return toast('请先填写 Tunnel ID', 'warning');
+    if (!tunnelKeyInput.trim() && !tunnelStatus?.keyConfigured) return toast('首次配置需要填写运行 API Key', 'warning');
+    setTunnelBusy(true);
+    try {
+      let status = (await api.setTunnelConfig(tunnelId, tunnelKeyInput.trim())).status;
+      setTunnelKeyInput('');
+      if (!status.installed) {
+        status = await api.installTunnelClient();
+      }
+      if (status.configured && status.installed) {
+        status = await api.connectTunnel();
+      }
+      setTunnelStatus(status);
+      toast(status.phase === 'ready' ? 'Secure MCP Tunnel 已连接' : status.message, status.phase === 'ready' ? 'success' : 'warning');
+    } catch (e: any) {
+      toast(e?.message || 'Tunnel 配置或连接失败', 'danger');
+      void api.tunnelStatus().then(setTunnelStatus).catch(() => {});
+    } finally {
+      setTunnelBusy(false);
+    }
+  }
+
+  async function installTunnelOnly() {
+    setTunnelBusy(true);
+    try {
+      const status = await api.installTunnelClient();
+      setTunnelStatus(status);
+      toast(status.message, status.phase === 'error' ? 'danger' : 'success');
+    } catch (e: any) {
+      toast(e?.message || 'tunnel-client 安装失败', 'danger');
+    } finally {
+      setTunnelBusy(false);
+    }
+  }
+
+  async function disconnectTunnel() {
+    setTunnelBusy(true);
+    try {
+      setTunnelStatus(await api.disconnectTunnel());
+      toast('Secure MCP Tunnel 已断开', 'success');
+    } catch (e: any) {
+      toast(e?.message || '断开 Tunnel 失败', 'danger');
+    } finally {
+      setTunnelBusy(false);
     }
   }
 
@@ -439,6 +505,45 @@ export default function Settings() {
           </div>
           <div className="tiny" style={{ color: 'var(--text-3)' }}>
             当前最小闭环：网页 ChatGPT 负责校对与改写，工作台负责链接解析、状态门和 Word 导出；不会把 Cookie、API Key 或本机文件路径发送到网页端。
+          </div>
+          <div className="set-row" style={{ display: 'block', border: 'none', paddingBottom: 0 }}>
+            <div className="s-main">
+              <div className="s-t">Secure MCP Tunnel（可选）</div>
+              <div className="s-d">
+                让网页 ChatGPT 通过 OpenAI 的出站隧道访问本机 MCP。工作台会检测并按需下载官方 tunnel-client；运行 API Key 只会加密保存在本机，不会显示或上传。
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, marginTop: 12 }}>
+              <Input
+                size="sm"
+                label="Tunnel ID"
+                placeholder="tunnel_…"
+                value={tunnelIdInput}
+                onValueChange={setTunnelIdInput}
+                aria-label="Tunnel ID"
+              />
+              <Input
+                size="sm"
+                type="password"
+                label="运行 API Key"
+                placeholder={tunnelStatus?.keyConfigured ? '已配置，如需更换请重新填写' : '粘贴 Runtime API Key'}
+                value={tunnelKeyInput}
+                onValueChange={setTunnelKeyInput}
+                aria-label="运行 API Key"
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+              <Button size="sm" color="primary" isLoading={tunnelBusy} onPress={() => void saveAndConnectTunnel()}>
+                {tunnelStatus?.installed ? '保存并连接' : '安装并连接'}
+              </Button>
+              {!tunnelStatus?.installed && <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={tunnelBusy} onPress={() => void installTunnelOnly()}>仅安装运行环境</Button>}
+              {tunnelStatus?.running && <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={tunnelBusy} onPress={() => void disconnectTunnel()}>断开</Button>}
+              <span className={`set-status ${tunnelStatus?.phase === 'ready' ? 'ok' : tunnelStatus?.phase === 'error' ? 'no' : ''}`}>
+                <Icon name={tunnelStatus?.phase === 'ready' ? 'check' : 'alert'} className="ic" size={14} />
+                {tunnelStatus?.phase === 'downloading' ? `${tunnelStatus.message} ${tunnelStatus.percent ?? 0}%` : tunnelStatus?.message || '正在检测 tunnel-client…'}
+              </span>
+              <a href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent-ink)' }}>打开 Tunnel 管理</a>
+            </div>
           </div>
         </div>
       </div>

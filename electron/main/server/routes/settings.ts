@@ -5,6 +5,7 @@ import { settings } from '../services/settings.js';
 import { CAP_SLOTS, CAP_IDS, type CapId } from '../services/caps.js';
 import { verifyCap } from '../services/aiProxy.js';
 import { runtimeSetupStatus, startRuntimeInstall } from '../services/runtimeSetup.js';
+import { getTunnelClientStatus, installTunnelClient, startTunnelClient, stopTunnelClient } from '../services/tunnelClient.js';
 
 export const settingsRouter = Router();
 
@@ -61,4 +62,31 @@ settingsRouter.get('/runtime', async (_req: Request, res: Response) => {
 
 settingsRouter.post('/runtime/install', async (_req: Request, res: Response) => {
   res.json(await startRuntimeInstall());
+});
+
+settingsRouter.get('/tunnel', (_req: Request, res: Response) => {
+  res.json(getTunnelClientStatus());
+});
+
+settingsRouter.post('/tunnel/config', async (req: Request, res: Response) => {
+  const { tunnelId, runtimeApiKey } = req.body ?? {};
+  const err = settings.setTunnelConfig(tunnelId, runtimeApiKey);
+  if (err) return res.status(400).json({ error: err, code: 'invalid_tunnel_config' });
+  res.json({ ok: true, status: getTunnelClientStatus() });
+});
+
+settingsRouter.post('/tunnel/install', async (_req: Request, res: Response) => {
+  try {
+    res.json(await installTunnelClient());
+  } catch (error: any) {
+    res.status(502).json({ error: error?.message || 'tunnel-client 安装失败', code: 'tunnel_install_failed', status: getTunnelClientStatus() });
+  }
+});
+
+settingsRouter.post('/tunnel/connect', async (_req: Request, res: Response) => {
+  res.json(await startTunnelClient());
+});
+
+settingsRouter.post('/tunnel/disconnect', async (_req: Request, res: Response) => {
+  res.json(await stopTunnelClient());
 });

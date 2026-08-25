@@ -22,6 +22,19 @@ Electron 打包应用：后端仍只监听 `127.0.0.1` 的随机端口；设置�
 
 如需把端点交给网页 ChatGPT，不能直接填写 `localhost`：网页端需要能访问的 HTTPS MCP 地址。请使用受信任的 MCP 隧道或反向代理，把公网 HTTPS 请求转发到本机这个端点，并只转发 `/mcp`。不要把工作台端口直接暴露到公网。
 
+## Secure MCP Tunnel（推荐）
+
+工作台设置页已内置可选的 `tunnel-client` 管理。它不会替代原有 API，也不会随每个安装包携带约 60 MB 的二进制；用户首次配置 Tunnel 时点击「安装并连接」，工作台会按当前系统架构从 OpenAI 官方发布地址下载、校验并安装到本机 `userData/tunnel-client`。后续每次启动工作台，如果本机已配置并安装客户端，会自动恢复连接；退出工作台时会停止客户端。
+
+首次配置需要两项不同的值：
+
+1. Platform Tunnels 中创建的 `Tunnel ID`；
+2. Platform Runtime API keys 中的运行 API Key。建议使用只具备 Tunnels **Read + Use** 的受限运行密钥，不要使用管理员密钥。
+
+在设置页填写后点击「安装并连接」。如果所在网络无法访问 GitHub，状态会保留为未连接，可先使用设置页的「Tunnel 管理」链接/官方发布页下载客户端，或在网络/代理可用后再次点击。工作台只把运行密钥交给本地 tunnel-client 进程的环境变量，页面和日志不展示明文。
+
+客户端健康后，再在 ChatGPT 开发者模式中选择 Tunnel 并选择同一个 `tunnel_id`。Tunnel 进程必须保持运行，网页 ChatGPT 才能发现并调用工作台 MCP；连接器的套餐、工作区权限和功能灰度以 OpenAI 当前页面为准。
+
 如果隧道支持固定 Bearer Token，可在启动工作台前设置：
 
 ```text

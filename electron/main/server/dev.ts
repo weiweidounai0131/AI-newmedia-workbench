@@ -3,11 +3,13 @@
 // 运行：npm run dev:server  （可加 PORT=8787 / MC_HEADLESS=0）
 import { createApp } from './index.js';
 import { startMediaCrawler, stopMediaCrawler } from './services/mediaCrawler.js';
+import { configureTunnelMcpServerUrl, stopTunnelClient } from './services/tunnelClient.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const app = createApp();
 
 app.listen(PORT, () => {
+  configureTunnelMcpServerUrl(`http://127.0.0.1:${PORT}/mcp`);
   console.log('────────────────────────────────────────────');
   console.log(`[M1] aiProxy 后端已启动：http://127.0.0.1:${PORT}`);
   console.log('  健康检查：  GET  /api/health');
@@ -24,8 +26,8 @@ app.listen(PORT, () => {
 
 // 关闭时停掉代理子进程
 process.on('SIGINT', () => {
-  stopMediaCrawler().finally(() => process.exit(0));
+  Promise.all([stopMediaCrawler(), stopTunnelClient()]).finally(() => process.exit(0));
 });
 process.on('SIGTERM', () => {
-  stopMediaCrawler().finally(() => process.exit(0));
+  Promise.all([stopMediaCrawler(), stopTunnelClient()]).finally(() => process.exit(0));
 });

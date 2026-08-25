@@ -41,6 +41,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 interface SettingsResp {
   rootDir: string | null;
+  mcpTunnel?: { configured: boolean; tunnelId: string | null; keyConfigured: boolean };
   suppliers: Record<string, string>;
   caps: CapSummary[];
 }
@@ -69,6 +70,18 @@ interface RuntimeSetupResp {
   phase: string;
   message: string;
   components: { id: string; label: string; ready: boolean; detail: string }[];
+}
+export interface TunnelClientStatus {
+  phase: 'unconfigured' | 'missing' | 'stopped' | 'downloading' | 'starting' | 'ready' | 'error';
+  configured: boolean;
+  keyConfigured: boolean;
+  tunnelId: string | null;
+  installed: boolean;
+  running: boolean;
+  healthy: boolean;
+  version?: string;
+  percent?: number;
+  message: string;
 }
 export interface UpdateStatus {
   phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
@@ -117,6 +130,11 @@ export const api = {
   verifyCap: (cap: CapId) => req<VerifyResp>('/api/settings/verify', { method: 'POST', body: JSON.stringify({ cap }) }),
   runtimeStatus: () => req<RuntimeSetupResp>('/api/settings/runtime'),
   installRuntime: () => req<RuntimeSetupResp>('/api/settings/runtime/install', { method: 'POST' }),
+  tunnelStatus: () => req<TunnelClientStatus>('/api/settings/tunnel'),
+  setTunnelConfig: (tunnelId: string, runtimeApiKey: string) => req<{ ok: boolean; status: TunnelClientStatus }>('/api/settings/tunnel/config', { method: 'POST', body: JSON.stringify({ tunnelId, runtimeApiKey }) }),
+  installTunnelClient: () => req<TunnelClientStatus>('/api/settings/tunnel/install', { method: 'POST' }),
+  connectTunnel: () => req<TunnelClientStatus>('/api/settings/tunnel/connect', { method: 'POST' }),
+  disconnectTunnel: () => req<TunnelClientStatus>('/api/settings/tunnel/disconnect', { method: 'POST' }),
   genTishici: (body: any) => req<TishiciResp>('/api/ai/tishici', { method: 'POST', body: JSON.stringify(body) }),
   xigaoRecognize: (body: any) => req<XigaoResp>('/api/ai/xigao/recognize', { method: 'POST', body: JSON.stringify(body) }),
   xigaoRewrite: (body: any) => req<XigaoResp>('/api/ai/xigao/rewrite', { method: 'POST', body: JSON.stringify(body) }),

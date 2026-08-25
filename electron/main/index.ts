@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { autoStartConfiguredTunnel, configureTunnelMcpServerUrl, stopTunnelClient } from './server/services/tunnelClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -328,6 +329,7 @@ function startServer(): Promise<number> {
       const addr = server!.address();
       const port = typeof addr === 'object' && addr ? addr.port : 8787;
       apiBase = `http://127.0.0.1:${port}`;
+      configureTunnelMcpServerUrl(`${apiBase}/mcp`);
       console.log(`[main] 后端已启动 ${apiBase}`);
       resolve(port);
     });
@@ -389,6 +391,8 @@ app.whenReady().then(async () => {
   void startMediaCrawler()
     .then(() => console.log('[main] MediaCrawler 代理已启动'))
     .catch((e) => console.warn('[main] MediaCrawler 代理启动失败，抓取功能暂不可用:', e));
+  // 若用户已经配置并安装 tunnel-client，随工作台启动恢复连接；未配置时不下载、不阻断主流程。
+  void autoStartConfiguredTunnel().catch((e) => console.warn('[main] Secure MCP Tunnel 自动连接失败:', e));
 
   app.on('activate', () => {
     // 在 macOS 中，窗口关闭后应用继续常驻；理论上服务不会关闭，但若被系统
@@ -408,6 +412,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  void stopTunnelClient();
   server?.close();
   server = null;
   apiBase = '';
