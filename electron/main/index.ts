@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { autoStartConfiguredTunnel, configureTunnelMcpServerUrl, stopTunnelClient } from './server/services/tunnelClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -329,7 +328,6 @@ function startServer(): Promise<number> {
       const addr = server!.address();
       const port = typeof addr === 'object' && addr ? addr.port : 8787;
       apiBase = `http://127.0.0.1:${port}`;
-      configureTunnelMcpServerUrl(`${apiBase}/mcp`);
       console.log(`[main] 后端已启动 ${apiBase}`);
       resolve(port);
     });
@@ -367,6 +365,10 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   await cleanupLegacyMacUpdateJobs();
+  // Electron 从启动台打开时的 cwd 可能是“/”。统一把非设置服务使用的
+  // 本地状态（冷却、审计、旧版抓取兼容文件等）放到 userData，避免回退到
+  // 无权限创建的 /.data，避免应用启动后设置文件和运行数据落到磁盘根目录。
+  if (app.isPackaged) process.env.NEWMEDIA_DATA_DIR = app.getPath('userData');
   // 本地 API 必须优先可用：即使抓取运行环境首次初始化较慢，设置、素材库、AI 等页面
   // 也不能因此全部出现 Failed to fetch。抓取代理改为窗口创建后后台就绪。
   await startServer();
@@ -382,6 +384,14 @@ app.whenReady().then(async () => {
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] || null;
   });
+  ipcMain.handle('choose-xhs-download-dir', async () => {
+    const options = {
+      title: '选择小红书洗稿解析目录',
+      properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
   createWindow();
 
   // 每次打开已安装应用都检查一次版本。更新源尚未配置或暂时不可用时不阻断工作台。
@@ -391,8 +401,6 @@ app.whenReady().then(async () => {
   void startMediaCrawler()
     .then(() => console.log('[main] MediaCrawler 代理已启动'))
     .catch((e) => console.warn('[main] MediaCrawler 代理启动失败，抓取功能暂不可用:', e));
-  // 若用户已经配置并安装 tunnel-client，随工作台启动恢复连接；未配置时不下载、不阻断主流程。
-  void autoStartConfiguredTunnel().catch((e) => console.warn('[main] Secure MCP Tunnel 自动连接失败:', e));
 
   app.on('activate', () => {
     // 在 macOS 中，窗口关闭后应用继续常驻；理论上服务不会关闭，但若被系统
@@ -412,7 +420,6 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  void stopTunnelClient();
   server?.close();
   server = null;
   apiBase = '';

@@ -183,7 +183,7 @@ export default function App() {
             {theme === 'dark' ? '浅色模式' : '深色模式'}
           </button>
           <div className="connection-status" aria-label="本地服务与平台 Cookie 状态">
-            <div className="local-badge"><span className={`dot ${connection.system === 'offline' ? 'danger' : connection.system === 'checking' ? 'warning' : ''}`} />localhost · {connection.system === 'online' ? '已连接' : connection.system === 'offline' ? '未连接' : '检测中'}</div>
+            <div className="local-badge"><span className={`dot ${connection.system === 'online' ? 'success' : connection.system === 'offline' ? 'danger' : 'warning'}`} />localhost · {connection.system === 'online' ? '已连接' : connection.system === 'offline' ? '未连接' : '检测中'}</div>
             <div className="local-badge"><span className={`dot ${connection.douyin ? 'success' : connection.douyin === null ? 'warning' : 'muted'}`} />抖音 Cookie · {connection.douyin ? '已获取' : connection.douyin === null ? '检测中' : '未获取'}</div>
             <div className="local-badge"><span className={`dot ${connection.xhs ? 'success' : connection.xhs === null ? 'warning' : 'muted'}`} />小红书 Cookie · {connection.xhs ? '已获取' : connection.xhs === null ? '检测中' : '未获取'}</div>
           </div>

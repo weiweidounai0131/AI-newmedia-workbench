@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { bundledRuntimeRoot, playwrightBrowsersPath, pythonExecutable, userRuntimeDataDir } from './runtimePaths.js';
+import { rememberXhsDownloadDir, resolveXhsDownloadDir } from './downloadPaths.js';
+import { settings } from './settings.js';
 
 const BASE_URL = process.env.WECHAT_MP_TOOLS_URL || 'http://127.0.0.1:5200';
 let startupPromise: Promise<void> | null = null;
@@ -11,6 +14,26 @@ async function toolRoot(): Promise<string> {
   if (process.env.WECHAT_MP_TOOLS_ROOT) return process.env.WECHAT_MP_TOOLS_ROOT;
   const bundled = await bundledRuntimeRoot();
   return bundled ? path.join(bundled, 'wechat-mp-tools') : path.resolve(process.cwd(), 'tools', 'wechat-mp-tools');
+}
+
+async function xhsDownloadRoots(): Promise<string[]> {
+  const runtimeData = await userRuntimeDataDir();
+  const bundled = await bundledRuntimeRoot();
+  const root = await toolRoot();
+  const configuredDataRoot = process.env.WECHAT_MP_TOOLS_DATA_DIR;
+  return [
+    process.env.WECHAT_MP_TOOLS_XHS_DOWNLOAD_DIR,
+    settings.xhsDownloadDir,
+    configuredDataRoot && path.join(configuredDataRoot, 'xhs_downloads'),
+    configuredDataRoot && path.join(configuredDataRoot, 'data', 'xhs_downloads'),
+    path.join(runtimeData, 'wechat-mp-tools', 'xhs_downloads'),
+    path.join(runtimeData, 'wechat-mp-tools', 'data', 'xhs_downloads'),
+    process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support', 'WeChat MP Tools', 'data', 'xhs_downloads')
+      : path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'WeChat MP Tools', 'data', 'xhs_downloads'),
+    path.join(root, 'data', 'xhs_downloads'),
+    bundled && path.join(bundled, 'wechat-mp-tools', 'data', 'xhs_downloads'),
+  ].filter((value): value is string => Boolean(value));
 }
 
 export interface DouyinDownloadTask {
@@ -49,7 +72,10 @@ async function serviceIsReady(): Promise<boolean> {
  * 下载工具被用户关闭后，下一次解析会自动恢复，不要求手工打开原桌面 App。
  */
 async function ensureService(): Promise<void> {
-  if (await serviceIsReady()) return;
+  if (await serviceIsReady()) {
+    await syncXhsDownloadDir();
+    return;
+  }
   if (startupPromise) return startupPromise;
   startupPromise = (async () => {
     const root = await toolRoot();
@@ -59,13 +85,15 @@ async function ensureService(): Promise<void> {
     if (!fs.existsSync(python) || !fs.existsSync(entry)) {
       throw new Error('本地下载服务未安装完成：缺少 wechat-mp-tools 运行环境');
     }
+    const dataRoot = path.join(await userRuntimeDataDir(), 'wechat-mp-tools');
     const child = spawn(python, ['app.py', '--no-browser', '--port', '5200'], {
       cwd: root,
       detached: true,
       stdio: 'ignore',
       env: {
         ...process.env,
-        WECHAT_MP_TOOLS_DATA_DIR: path.join(await userRuntimeDataDir(), 'wechat-mp-tools'),
+        WECHAT_MP_TOOLS_DATA_DIR: dataRoot,
+        WECHAT_MP_TOOLS_XHS_DOWNLOAD_DIR: settings.xhsDownloadDir || path.join(dataRoot, 'data', 'xhs_downloads'),
         WECHAT_MP_TOOLS_RESOURCES_DIR: root,
         PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(),
       },
@@ -75,11 +103,29 @@ async function ensureService(): Promise<void> {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       await delay(500);
-      if (await serviceIsReady()) return;
+      if (await serviceIsReady()) {
+        await syncXhsDownloadDir();
+        return;
+      }
     }
     throw new Error('本地下载服务启动超时，请稍后重试');
   })().finally(() => { startupPromise = null; });
   return startupPromise;
+}
+
+/** 将工作台设置的固定目录同步到正在运行的 wechat-mp-tools；服务未启动时由下一次拉起时的环境变量接管。 */
+export async function syncXhsDownloadDir(): Promise<boolean> {
+  try {
+    const response = await fetch(`${BASE_URL}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xhs_download_dir: settings.xhsDownloadDir || null }),
+      signal: AbortSignal.timeout(2_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function recordTimeMs(value: unknown): number {
@@ -188,16 +234,24 @@ async function waitForXhsTask(task: XhsDownloadTask): Promise<{ path: string; ti
     task.message = String(progress?.current || '原软件正在下载小红书图文');
     if (progress?.status === 'completed') {
       let item = Array.isArray(progress?.results) ? progress.results.find((row: any) => row?.success && row?.path) : undefined;
+      const noteId = task.link.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/)?.[1];
       // 原软件发现同一笔记已经下载时会返回 skipped，任务结果不再带 path；
       // 此时按同一 note_id 从它自己的历史记录取回既有本地目录即可，不需要重复访问平台。
       if (!item) {
-        const noteId = task.link.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/)?.[1];
         const history = await remoteJson('/api/xhs/history?limit=100');
-        const rows = Array.isArray(history?.history) ? history.history : [];
-        item = rows.find((row: any) => row?.success && row?.path && (!noteId || row?.note_id === noteId));
+        const historyRows = Array.isArray(history?.history) ? history.history : [];
+        item = historyRows.find((row: any) => row?.success && row?.path && (!noteId || row?.note_id === noteId));
       }
-      if (!item?.path || !fs.existsSync(item.path)) throw new Error('原下载软件已完成，但未找到落盘的小红书图文目录');
-      return { path: item.path, title: item.title };
+      const resolvedPath = resolveXhsDownloadDir(item?.path, await xhsDownloadRoots(), {
+        noteId,
+        title: item?.title || task.link,
+      });
+      if (!resolvedPath) {
+        // 目录已被移动/清理时，不要把旧历史记录继续当成成功结果，给出可操作的提示。
+        throw new Error('原下载软件已完成，但实际图文目录不存在；请重新下载该链接');
+      }
+      rememberXhsDownloadDir(resolvedPath);
+      return { path: resolvedPath, title: item?.title };
     }
     if (progress?.status === 'failed' || progress?.status === 'cancelled') {
       const detail = Array.isArray(progress?.results) ? progress.results.find((row: any) => row?.error)?.error : '';

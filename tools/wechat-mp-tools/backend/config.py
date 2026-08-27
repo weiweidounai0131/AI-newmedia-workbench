@@ -63,6 +63,8 @@ DEFAULT_SETTINGS = {
     "rss_end_minute": 0,
     "rss_upload_enabled": False,
     "rss_upload_url": "",
+    # 工作台可固定小红书图文下载/解析目录；未配置时沿用 DATA_DIR/xhs_downloads。
+    "xhs_download_dir": os.environ.get("WECHAT_MP_TOOLS_XHS_DOWNLOAD_DIR", ""),
 }
 
 

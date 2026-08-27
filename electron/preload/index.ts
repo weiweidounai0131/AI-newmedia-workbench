@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   getApiBase: (): Promise<string> => ipcRenderer.invoke('api-base'),
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app-version'),
   chooseLibraryRoot: (): Promise<string | null> => ipcRenderer.invoke('choose-library-root'),
+  chooseXhsDownloadDir: (): Promise<string | null> => ipcRenderer.invoke('choose-xhs-download-dir'),
   checkForUpdates: (): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('check-for-updates'),
   getUpdateStatus: (): Promise<unknown> => ipcRenderer.invoke('get-update-status'),
   onUpdateStatus: (callback: (status: unknown) => void): (() => void) => {

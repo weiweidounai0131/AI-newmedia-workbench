@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg, mapSize, mapQuality } from '../lib/ui';
 
-// API 默认 gpt-image-2：按已确认的 AIHubMix 能力开放 1K / 2K / 4K 画幅。
+// API 默认 gpt-image-2：按设置页当前图像供应商开放 1K / 2K / 4K 画幅。
 const AIHUBMIX_SIZES = ['自动', '1024×1024', '1536×1024', '1024×1536', '2048×2048', '2048×1152', '3840×2160', '2160×3840'];
 const QUALITIES = ['自动', '低', '中', '高'];
 
@@ -15,6 +15,8 @@ export default function Chutu() {
   const [optimizeHint, setOptimizeHint] = useState('');
   const [codexStatus, setCodexStatus] = useState<{ available: boolean; message: string; version?: string } | null>(null);
   const [usedProvider, setUsedProvider] = useState<'api' | 'codex' | null>(null);
+  const [imageProviderLabel, setImageProviderLabel] = useState('AIHubMix');
+  const [imageModel, setImageModel] = useState('gpt-image-2');
 
   useEffect(() => {
     api.chutuProviders()
@@ -28,6 +30,16 @@ export default function Chutu() {
       });
   // 仅在首次打开页面时检测本机订阅；避免切页后重复检测。
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    api.getSettings().then((summary) => {
+      const image = summary.caps.find((cap) => cap.cap === 'image');
+      if (image?.providerLabel) setImageProviderLabel(image.providerLabel);
+      if (image?.model) setImageModel(image.model);
+    }).catch(() => {
+      /* 设置页不可用时保留默认展示，不影响 Codex 订阅出图。 */
+    });
   }, []);
 
   function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,7 +86,7 @@ export default function Chutu() {
     } catch (e: any) {
       const raw = e?.message || '出图失败';
       const message = /connection error|fetch failed/i.test(raw)
-        ? '无法连接 AIHubMix 主网关，图片没有生成。请检查网络后重试。'
+        ? `无法连接 ${imageProviderLabel} 出图网关，图片没有生成。请检查网络后重试。`
         : `生图失败：${raw}`;
       setChutu({ error: message, done: false, b64: null });
       toast(message, 'danger');
@@ -132,7 +144,7 @@ export default function Chutu() {
                     done: false,
                   })}
                 >
-                  API（AIHubMix）
+                  API（{imageProviderLabel}）
                 </Button>
                 {codexStatus?.available && (
                   <Button
@@ -148,7 +160,7 @@ export default function Chutu() {
                 )}
               </div>
               <div className={`tiny ${chutu.provider === 'codex' && !codexStatus?.available ? 'err-text' : ''}`} style={{ marginTop: 7 }}>
-                {chutu.provider === 'codex' ? (codexStatus?.message || '正在检查本机 Codex 订阅…') : 'AIHubMix · gpt-image-2 · 使用设置页已保存的 Key'}
+                {chutu.provider === 'codex' ? (codexStatus?.message || '正在检查本机 Codex 订阅…') : `${imageProviderLabel} · ${imageModel} · 使用设置页已保存的 Key`}
               </div>
             </div>
             <div className="field">

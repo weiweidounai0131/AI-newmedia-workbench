@@ -55,11 +55,11 @@ aiRouter.get('/xigao/xhs-download/status/:taskId', (req: Request, res: Response)
   res.json(task);
 });
 
-aiRouter.post('/xigao/xhs-source', (req: Request, res: Response) => {
+aiRouter.post('/xigao/xhs-source', async (req: Request, res: Response) => {
   const { path: noteDir, title } = req.body ?? {};
   if (!noteDir) return res.status(400).json({ error: '下载目录不能为空', code: 'bad_request' });
   try {
-    res.json(importXhsNote(String(noteDir), title ? String(title) : undefined));
+    res.json(await importXhsNote(String(noteDir), title ? String(title) : undefined));
   } catch (err) {
     if (err instanceof ScrapeError) return res.status(err.status).json({ error: err.message, code: err.code });
     fail(res, err);

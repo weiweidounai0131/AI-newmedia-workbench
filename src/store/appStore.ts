@@ -13,12 +13,25 @@ export interface CapSummary {
   locked: boolean;
   model: string;
   alternatives: string[];
+  models?: string[];
+  modelLabels?: Record<string, string>;
+  provider?: string;
+  providerLabel?: string;
+  providerPortal?: string | null;
+  providerOptions?: {
+    id: string;
+    label: string;
+    portal: string;
+    models: string[];
+    modelLabels?: Record<string, string>;
+  }[];
   configured: boolean;
   verified?: boolean;
 }
 
 export interface SettingsSummary {
   rootDir: string | null;
+  xhsDownloadDir: string | null;
   suppliers: Record<string, string>;
   caps: CapSummary[];
 }

@@ -11,7 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
-import { CAP_SLOTS, CapId, validateKeyFormat } from './caps.js';
+import { CAP_SLOTS, CapId, getProviderDef, getProviderOptions, validateKeyFormat } from './caps.js';
 
 const require = createRequire(import.meta.url);
 
@@ -95,11 +95,11 @@ function aesEncryptor(dir: string): Encryptor {
 interface StoredSettings {
   keys: Record<string, string>; // keyId -> 加密后的密文
   suppliers: Partial<Record<CapId, string>>; // cap -> 当前模型
+  providers: Partial<Record<CapId, string>>; // cap -> 当前供应商
   // 只有后端真实验证成功后才写入；前端切页不会再丢失“已验证”状态。
   verified: Partial<Record<CapId, string>>;
   rootDir?: string; // 导出根目录（方案 C，加密存，见 §5.1）
-  // Secure MCP Tunnel 配置：Tunnel ID 可明文保存，运行密钥必须走同一加密盒。
-  tunnel?: { id?: string; apiKey?: string };
+  xhsDownloadDir?: string; // 小红书图文下载/洗稿解析目录
 }
 
 const DEFAULT_SETTINGS: StoredSettings = {
@@ -108,7 +108,9 @@ const DEFAULT_SETTINGS: StoredSettings = {
   suppliers: Object.fromEntries(
     (Object.keys(CAP_SLOTS) as CapId[]).map((c) => [c, CAP_SLOTS[c].defaultModel]),
   ),
-  tunnel: {},
+  providers: Object.fromEntries(
+    (Object.keys(CAP_SLOTS) as CapId[]).map((c) => [c, CAP_SLOTS[c].defaultProvider ?? CAP_SLOTS[c].keyId]),
+  ),
 };
 
 class SettingsStore {
@@ -130,14 +132,19 @@ class SettingsStore {
       const loaded = {
         keys: raw.keys ?? {},
         suppliers: { ...DEFAULT_SETTINGS.suppliers, ...(raw.suppliers ?? {}) },
+        providers: { ...DEFAULT_SETTINGS.providers, ...(raw.providers ?? {}) },
         verified: raw.verified ?? {},
         rootDir: raw.rootDir,
-        tunnel: raw.tunnel ?? {},
+        xhsDownloadDir: raw.xhsDownloadDir,
       };
       // 旧版本的 image 槽位被固定为 gpt-image-1；将这一历史默认值迁移为新版默认。
-      if (loaded.suppliers.image === 'gpt-image-1') {
-        loaded.suppliers.image = 'gpt-image-2';
-        delete loaded.verified.image;
+      // 同时清理旧版本遗留的 Tunnel 配置，避免本机继续保留无用凭据。
+      if (loaded.suppliers.image === 'gpt-image-1' || raw.tunnel) {
+        if (loaded.suppliers.image === 'gpt-image-1') {
+          loaded.suppliers.image = 'gpt-image-2';
+          delete loaded.verified.image;
+        }
+        // 旧配置不再参与运行；写回已知设置字段，移除遗留凭据。
         fs.writeFileSync(this.file, JSON.stringify(loaded, null, 2), { mode: 0o600 });
       }
       return loaded;
@@ -173,12 +180,32 @@ class SettingsStore {
     }
   }
 
+  providerId(cap: CapId): string {
+    return getProviderDef(cap, this.data.providers[cap]).id;
+  }
+
+  providerFor(cap: CapId) {
+    return getProviderDef(cap, this.data.providers[cap]);
+  }
+
+  currentModel(cap: CapId): string {
+    const provider = this.providerFor(cap);
+    const chosen = this.data.suppliers[cap];
+    const allowed = [provider.defaultModel, ...provider.alternatives];
+    return chosen && allowed.includes(chosen) ? chosen : provider.defaultModel;
+  }
+
+  /** 按当前供应商写入 Key；同一供应商可被多个能力槽位复用。 */
+  setKeyForCap(cap: CapId, rawKey: string): string | null {
+    return this.setKey(this.providerFor(cap).keyId, rawKey);
+  }
+
   isConfigured(cap: CapId): boolean {
-    return !!this.getKey(CAP_SLOTS[cap].keyId);
+    return !!this.getKey(this.providerFor(cap).keyId);
   }
 
   markVerified(cap: CapId): void {
-    this.data.verified[cap] = this.data.suppliers[cap] ?? CAP_SLOTS[cap].defaultModel;
+    this.data.verified[cap] = `${this.providerId(cap)}:${this.currentModel(cap)}`;
     this.persist();
   }
 
@@ -190,15 +217,35 @@ class SettingsStore {
   }
 
   isVerified(cap: CapId): boolean {
-    const expectedModel = this.data.suppliers[cap] ?? CAP_SLOTS[cap].defaultModel;
-    return this.isConfigured(cap) && this.data.verified[cap] === expectedModel;
+    if (!this.isConfigured(cap)) return false;
+    const expected = `${this.providerId(cap)}:${this.currentModel(cap)}`;
+    if (this.data.verified[cap] === expected) return true;
+    // 兼容旧版本只保存模型 ID 的验证记录；仅对默认供应商放行，切换供应商后必须重新验证。
+    const defaultProvider = CAP_SLOTS[cap].defaultProvider ?? CAP_SLOTS[cap].keyId;
+    return this.providerId(cap) === defaultProvider && this.data.verified[cap] === this.currentModel(cap);
   }
 
   // ---- 供应商切换 ----
+  setProvider(cap: CapId, providerId: string): string | null {
+    const def = CAP_SLOTS[cap];
+    const options = getProviderOptions(cap);
+    if (def.locked) return `${def.label} 槽位已锁定，不可切换`;
+    if (!options.length) return `${def.label} 暂不支持切换供应商`;
+    const provider = options.find((item) => item.id === providerId);
+    if (!provider) return `供应商 ${providerId} 不在 ${def.label} 可选范围内`;
+    this.data.providers[cap] = provider.id;
+    const allowed = [provider.defaultModel, ...provider.alternatives];
+    if (!allowed.includes(this.data.suppliers[cap] ?? '')) this.data.suppliers[cap] = provider.defaultModel;
+    delete this.data.verified[cap];
+    this.persist();
+    return null;
+  }
+
   setSupplier(cap: CapId, model: string): string | null {
     const def = CAP_SLOTS[cap];
     if (def.locked) return `${def.label} 槽位已锁定，不可切换`;
-    const allowed = [def.defaultModel, ...def.alternatives];
+    const provider = this.providerFor(cap);
+    const allowed = [provider.defaultModel, ...provider.alternatives];
     if (!allowed.includes(model)) return `模型 ${model} 不在 ${def.label} 可选范围内`;
     this.data.suppliers[cap] = model;
     delete this.data.verified[cap];
@@ -216,38 +263,15 @@ class SettingsStore {
     this.persist();
   }
 
-  // ---- Secure MCP Tunnel ----
-  get tunnelId(): string | null {
-    const value = this.data.tunnel?.id?.trim();
-    return value || null;
+  get xhsDownloadDir(): string | undefined {
+    const value = this.data.xhsDownloadDir?.trim();
+    return value || undefined;
   }
 
-  get tunnelApiKey(): string | null {
-    const cipher = this.data.tunnel?.apiKey;
-    if (!cipher) return null;
-    try {
-      return this.enc.decrypt(cipher);
-    } catch {
-      return null;
-    }
-  }
-
-  setTunnelConfig(tunnelId: string, apiKey: string): string | null {
-    const id = String(tunnelId || '').trim();
-    const key = String(apiKey || '').trim();
-    if (!id) return 'Tunnel ID 不能为空';
-    if (!/^tunnel_[A-Za-z0-9_-]+$/.test(id)) return 'Tunnel ID 格式不正确，应以 tunnel_ 开头';
-    const existing = key ? null : this.tunnelApiKey;
-    const value = key || existing || '';
-    if (!value) return '运行 API Key 不能为空';
-    if (value.length < 20) return '运行 API Key 长度不足，请粘贴完整密钥';
-    this.data.tunnel = { id, apiKey: key ? this.enc.encrypt(value) : this.data.tunnel?.apiKey };
-    this.persist();
-    return null;
-  }
-
-  clearTunnelConfig(): void {
-    this.data.tunnel = {};
+  setXhsDownloadDir(dir: string): void {
+    const value = dir.trim();
+    if (value) this.data.xhsDownloadDir = value;
+    else delete this.data.xhsDownloadDir;
     this.persist();
   }
 
@@ -255,18 +279,26 @@ class SettingsStore {
   summary() {
     return {
       rootDir: this.data.rootDir ?? null,
-      mcpTunnel: {
-        configured: !!this.tunnelId && !!this.tunnelApiKey,
-        tunnelId: this.tunnelId,
-        keyConfigured: !!this.tunnelApiKey,
-      },
+      xhsDownloadDir: this.xhsDownloadDir ?? null,
       suppliers: this.data.suppliers,
       caps: (Object.keys(CAP_SLOTS) as CapId[]).map((cap) => ({
+        provider: this.providerId(cap),
+        providerLabel: this.providerFor(cap).label,
+        providerPortal: this.providerFor(cap).portal || null,
+        providerOptions: getProviderOptions(cap).map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          portal: provider.portal,
+          models: [provider.defaultModel, ...provider.alternatives],
+          modelLabels: provider.modelLabels ?? {},
+        })),
         cap,
         label: CAP_SLOTS[cap].label,
         locked: CAP_SLOTS[cap].locked,
-        model: this.data.suppliers[cap] ?? CAP_SLOTS[cap].defaultModel,
-        alternatives: CAP_SLOTS[cap].alternatives,
+        model: this.currentModel(cap),
+        alternatives: this.providerFor(cap).alternatives,
+        models: [this.providerFor(cap).defaultModel, ...this.providerFor(cap).alternatives],
+        modelLabels: this.providerFor(cap).modelLabels ?? {},
         configured: this.isConfigured(cap),
         verified: this.isVerified(cap),
       })),

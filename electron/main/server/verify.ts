@@ -66,6 +66,9 @@ async function run() {
   // 明文不落盘：settings.json 中不应含 sk-dummy 明文
   const raw = fs.readFileSync(path.join(verifyDataDir, 'settings.json'), 'utf8');
   check('明文 Key 不落盘', !/sk-dummy-/.test(raw), 'settings.json 含明文');
+  // 额外供应商的 Key 也必须走同一套加密存储。
+  settings.setKey('sudocode', 'sk-dummy-sudocode');
+  check('加密往返 sudocode', settings.getKey('sudocode') === 'sk-dummy-sudocode');
 
   console.log('\n=== M1 验证：四能力路由 + 请求体 ===');
   const calls: Partial<Record<CapId, Call>> = {};
@@ -84,6 +87,18 @@ async function run() {
   let c = await capture('text', (f) => generateText({ user: 'hello' }, f));
   check('text 路由到 DeepSeek', c.url === 'https://api.deepseek.com/chat/completions', c.url);
   check('text 模型=deepseek-chat', c.body?.model === 'deepseek-chat', c.body?.model);
+
+  // text 供应商切换：切换到智谱后，模型自动落到 GLM-5.3-Flash，随后验证 GLM-4.5-Air。
+  let err = settings.setProvider('text', 'zhipu');
+  check('text 切换到智谱', !err && settings.providerId('text') === 'zhipu', err ?? '');
+  c = await capture('text', (f) => generateText({ user: 'hello' }, f));
+  check('text 智谱路由', c.url === 'https://open.bigmodel.cn/api/paas/v4/chat/completions', c.url);
+  check('text 智谱默认模型=glm-5.3-flash', c.body?.model === 'glm-5.3-flash', c.body?.model);
+  err = settings.setSupplier('text', 'glm-4.5-air');
+  check('text 选择 GLM-4.5-Air', !err, err ?? '');
+  c = await capture('text', (f) => generateText({ user: 'hello' }, f));
+  check('text 智谱模型=glm-4.5-air', c.body?.model === 'glm-4.5-air', c.body?.model);
+  settings.setProvider('text', 'deepseek');
 
   // visionImg
   c = await capture('visionImg', (f) => recognize({ cap: 'visionImg', parts: [{ type: 'image', data: 'xx', mime: 'image/jpeg' }] }, f));
@@ -107,6 +122,14 @@ async function run() {
   // image（有参考图 → edits）
   c = await capture('image', (f) => generateImage({ prompt: 'a poster', refImgs: [{ type: 'image', data: 'yy', mime: 'image/png' }] }, f));
   check('image 有参考图走 /images/edits', c.url === 'https://aihubmix.com/v1/images/edits', c.url);
+
+  // image 供应商切换：SudoCode 使用独立 Key 与网关，切回 AIHubMix 后不影响默认链路。
+  err = settings.setProvider('image', 'sudocode');
+  check('image 切换到 SudoCode', !err && settings.providerId('image') === 'sudocode', err ?? '');
+  c = await capture('image', (f) => generateImage({ prompt: 'a poster' }, f));
+  check('image 经 SudoCode 网关', c.url === 'https://api.sudocode.chat/v1/images/generations', c.url);
+  check('image SudoCode 模型=gpt-image-2', c.body?.model === 'gpt-image-2', c.body?.model);
+  settings.setProvider('image', 'aihubmix');
 
   console.log('\n=== M1 验证：dry-run 验证（verifyCap） ===');
   for (const cap of CAP_IDS) {

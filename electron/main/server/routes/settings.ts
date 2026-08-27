@@ -1,11 +1,14 @@
 // 设置路由：BACKEND-PATH §6.6（API 契约）
 // 明文 Key 绝不出现在 GET 响应体；写入走加密存储。
 import { Router, type Request, type Response } from 'express';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { settings } from '../services/settings.js';
 import { CAP_SLOTS, CAP_IDS, type CapId } from '../services/caps.js';
 import { verifyCap } from '../services/aiProxy.js';
 import { runtimeSetupStatus, startRuntimeInstall } from '../services/runtimeSetup.js';
-import { getTunnelClientStatus, installTunnelClient, startTunnelClient, stopTunnelClient } from '../services/tunnelClient.js';
+import { syncXhsDownloadDir } from '../services/wechatMpTools.js';
 
 export const settingsRouter = Router();
 
@@ -20,7 +23,7 @@ settingsRouter.post('/key', (req: Request, res: Response) => {
   if (!cap || !CAP_SLOTS[cap as CapId]) {
     return res.status(400).json({ error: 'cap 非法', code: 'bad_request' });
   }
-  const err = settings.setKey(CAP_SLOTS[cap as CapId].keyId, key ?? '');
+  const err = settings.setKeyForCap(cap as CapId, key ?? '');
   if (err) return res.status(400).json({ error: err, code: 'invalid_key' });
   settings.clearVerified(cap as CapId);
   res.json({ ok: true, configured: true });
@@ -34,6 +37,17 @@ settingsRouter.post('/supplier', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// POST /api/settings/provider { cap, provider } → 切换能力供应商
+settingsRouter.post('/provider', (req: Request, res: Response) => {
+  const { cap, provider } = req.body ?? {};
+  if (!cap || !CAP_SLOTS[cap as CapId] || typeof provider !== 'string') {
+    return res.status(400).json({ error: 'cap 或 provider 非法', code: 'bad_request' });
+  }
+  const err = settings.setProvider(cap as CapId, provider);
+  if (err) return res.status(400).json({ error: err, code: 'invalid_provider' });
+  res.json({ ok: true, provider: settings.providerId(cap as CapId) });
+});
+
 // POST /api/settings/rootdir { rootDir } → 方案 C 导出根目录
 settingsRouter.post('/rootdir', (req: Request, res: Response) => {
   const { rootDir } = req.body ?? {};
@@ -42,6 +56,28 @@ settingsRouter.post('/rootdir', (req: Request, res: Response) => {
   }
   settings.setRootDir(rootDir);
   res.json({ ok: true });
+});
+
+// POST /api/settings/xhs-download-dir { xhsDownloadDir } → 固定小红书图文下载/解析目录
+settingsRouter.post('/xhs-download-dir', async (req: Request, res: Response) => {
+  const raw = typeof req.body?.xhsDownloadDir === 'string' ? req.body.xhsDownloadDir.trim() : '';
+  if (!raw) {
+    settings.setXhsDownloadDir('');
+    const synced = await syncXhsDownloadDir();
+    return res.json({ ok: true, xhsDownloadDir: null, synced });
+  }
+  const expanded = raw === '~' ? os.homedir() : raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw;
+  const normalized = path.resolve(expanded);
+  if (normalized === path.parse(normalized).root) return res.status(400).json({ error: '解析目录不能设置为磁盘根目录', code: 'invalid_path' });
+  try {
+    fs.mkdirSync(normalized, { recursive: true });
+    if (!fs.statSync(normalized).isDirectory()) throw new Error('目标不是文件夹');
+  } catch (error: any) {
+    return res.status(400).json({ error: `解析目录不可用：${error?.message || '无法创建或访问文件夹'}`, code: 'invalid_path' });
+  }
+  settings.setXhsDownloadDir(normalized);
+  const synced = await syncXhsDownloadDir();
+  return res.json({ ok: true, xhsDownloadDir: normalized, synced });
 });
 
 // POST /api/settings/verify { cap } → dry-run 探测 Key 是否可用
@@ -62,31 +98,4 @@ settingsRouter.get('/runtime', async (_req: Request, res: Response) => {
 
 settingsRouter.post('/runtime/install', async (_req: Request, res: Response) => {
   res.json(await startRuntimeInstall());
-});
-
-settingsRouter.get('/tunnel', (_req: Request, res: Response) => {
-  res.json(getTunnelClientStatus());
-});
-
-settingsRouter.post('/tunnel/config', async (req: Request, res: Response) => {
-  const { tunnelId, runtimeApiKey } = req.body ?? {};
-  const err = settings.setTunnelConfig(tunnelId, runtimeApiKey);
-  if (err) return res.status(400).json({ error: err, code: 'invalid_tunnel_config' });
-  res.json({ ok: true, status: getTunnelClientStatus() });
-});
-
-settingsRouter.post('/tunnel/install', async (_req: Request, res: Response) => {
-  try {
-    res.json(await installTunnelClient());
-  } catch (error: any) {
-    res.status(502).json({ error: error?.message || 'tunnel-client 安装失败', code: 'tunnel_install_failed', status: getTunnelClientStatus() });
-  }
-});
-
-settingsRouter.post('/tunnel/connect', async (_req: Request, res: Response) => {
-  res.json(await startTunnelClient());
-});
-
-settingsRouter.post('/tunnel/disconnect', async (_req: Request, res: Response) => {
-  res.json(await stopTunnelClient());
 });

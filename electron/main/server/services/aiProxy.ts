@@ -76,13 +76,14 @@ function proxyAgent(): HttpsProxyAgent<string> | undefined {
 
 function buildClient(cap: CapId, injectFetch?: typeof globalThis.fetch, timeout = 120_000, maxRetries = 2): OpenAI {
   const def = CAP_SLOTS[cap];
-  const apiKey = settings.getKey(def.keyId);
+  const provider = settings.providerFor(cap);
+  const apiKey = settings.getKey(provider.keyId);
   if (!apiKey) {
-    throw new AiProxyError('key_missing', `「${def.label}」能力未配置 Key，请到设置页填写`);
+    throw new AiProxyError('key_missing', `「${def.label} · ${provider.label}」能力未配置 Key，请到设置页填写`);
   }
   return new OpenAI({
     apiKey,
-    baseURL: def.baseURL,
+    baseURL: provider.baseURL,
     timeout,
     maxRetries,
     httpAgent: proxyAgent(),
@@ -92,9 +93,7 @@ function buildClient(cap: CapId, injectFetch?: typeof globalThis.fetch, timeout 
 }
 
 function currentModel(cap: CapId): string {
-  const def = CAP_SLOTS[cap];
-  const chosen = settings.summary().suppliers[cap];
-  return chosen ?? def.defaultModel;
+  return settings.currentModel(cap);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +199,7 @@ export async function recognize(opts: RecognizeOpts, injectFetch?: typeof global
 }
 
 // ---------------------------------------------------------------------------
-// 出图能力（image）：经 AIHubMix 中转，默认 gpt-image-2，固定 1 张
+// 出图能力（image）：按设置页选择的 AIHubMix / SudoCode 供应商调用，固定 1 张
 // ---------------------------------------------------------------------------
 export interface ImageOpts {
   prompt: string;
@@ -362,7 +361,7 @@ export async function generateImage(opts: ImageOpts, injectFetch?: typeof global
   const quality = opts.quality ?? 'auto';
 
   try {
-    // AIHubMix 的 gpt-image-2 官方建议单次等待至少 10 分钟；出图禁用自动重试，防止重复扣费。
+    // 图像供应商的 gpt-image-2 请求可能较慢；出图禁用自动重试，防止重复扣费。
     const client = buildClient(cap, injectFetch, 600_000, 0);
     if (opts.refImgs && opts.refImgs.length > 0) {
       // 参考图 → /v1/images/edits
@@ -373,7 +372,7 @@ export async function generateImage(opts: ImageOpts, injectFetch?: typeof global
         image: images as any,
         prompt: opts.prompt,
         n: 1,
-        // AIHubMix 的 gpt-image-2 支持平台扩展的 2K / 4K 尺寸；SDK 类型仅覆盖 OpenAI 原生枚举。
+        // 部分图像网关支持平台扩展的 2K / 4K 尺寸；SDK 类型仅覆盖 OpenAI 原生枚举。
         size: size as any,
         quality,
       });
@@ -385,7 +384,7 @@ export async function generateImage(opts: ImageOpts, injectFetch?: typeof global
       model,
       prompt: opts.prompt,
       n: 1,
-      // 同上：透传 AIHubMix 扩展尺寸。
+      // 同上：透传网关支持的扩展尺寸。
       size: size as any,
       quality,
     });
@@ -413,8 +412,9 @@ function normImages(resp: any): { b64: string }[] {
 // ---------------------------------------------------------------------------
 export async function verifyCap(cap: CapId, injectFetch?: typeof globalThis.fetch): Promise<{ ok: boolean; model?: string; error?: string }> {
   const def = CAP_SLOTS[cap];
-  if (!settings.getKey(def.keyId)) {
-    return { ok: false, error: `「${def.label}」未配置 Key` };
+  const provider = settings.providerFor(cap);
+  if (!settings.getKey(provider.keyId)) {
+    return { ok: false, error: `「${def.label} · ${provider.label}」未配置 Key` };
   }
   if (def.kind === 'image') {
     // 出图真实调用有成本，dry-run 仅做无生成成本的鉴权请求。
@@ -426,7 +426,7 @@ export async function verifyCap(cap: CapId, injectFetch?: typeof globalThis.fetc
     } catch (err) {
       const normalized = normalizeError(err, cap);
       const timedOut = /timeout|timed out|aborted|aborterror/i.test(normalized.message);
-      return { ok: false, error: timedOut ? 'AIHubMix 验证请求超时（未发起出图、不会扣图像额度），请稍后重试' : normalized.message };
+      return { ok: false, error: timedOut ? `${provider.label} 验证请求超时（未发起出图、不会扣图像额度），请稍后重试` : normalized.message };
     }
   }
   try {

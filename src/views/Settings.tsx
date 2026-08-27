@@ -1,18 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { Button, Input, Select, SelectItem, Chip, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
-import { CAP_SLOTS, type CapId } from '../../electron/main/server/services/caps';
+import { CAP_SLOTS, getProviderDef, getProviderOptions, type CapId } from '../../electron/main/server/services/caps';
 import { useApp, setSettings, setView } from '../store/appStore';
-import { api, getApiBase, type TunnelClientStatus, type UpdateStatus } from '../api/client';
+import { api, type UpdateStatus } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
-
-const API_KEY_PORTALS: Record<CapId, string> = {
-  text: 'https://platform.deepseek.com/',
-  visionImg: 'https://open.bigmodel.cn/',
-  visionVideo: 'https://bailian.console.aliyun.com/',
-  image: 'https://aihubmix.com/',
-};
 
 export default function Settings() {
   const settings = useApp((s) => s.settings);
@@ -25,6 +18,9 @@ export default function Settings() {
   // M3：导出根目录可编辑并真实写入（POST /api/settings/rootdir）
   const [rootDirInput, setRootDirInput] = useState<string>('');
   const [savingRoot, setSavingRoot] = useState(false);
+  // 小红书图文下载与洗稿解析使用同一个可固定目录，避免下载服务与工作台各找各的路径。
+  const [xhsDownloadDirInput, setXhsDownloadDirInput] = useState<string>('');
+  const [savingXhsDownloadDir, setSavingXhsDownloadDir] = useState(false);
   // M4：抓取账号登录态
   const [scrapeStatus, setScrapeStatus] = useState<{ electron: boolean; platforms: Record<string, boolean> }>({ electron: false, platforms: {} });
   const [loginLoading, setLoginLoading] = useState<string | null>(null);
@@ -41,12 +37,6 @@ export default function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
   const [appVersion, setAppVersion] = useState('');
-  const [mcpEndpoint, setMcpEndpoint] = useState('');
-  const [mcpOnline, setMcpOnline] = useState<boolean | null>(null);
-  const [tunnelStatus, setTunnelStatus] = useState<TunnelClientStatus | null>(null);
-  const [tunnelIdInput, setTunnelIdInput] = useState('');
-  const [tunnelKeyInput, setTunnelKeyInput] = useState('');
-  const [tunnelBusy, setTunnelBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -54,22 +44,13 @@ export default function Settings() {
   }, [settings?.rootDir]);
 
   useEffect(() => {
+    setXhsDownloadDirInput(settings?.xhsDownloadDir || '');
+  }, [settings?.xhsDownloadDir]);
+
+  useEffect(() => {
     let active = true;
     void api.getUpdateStatus().then((status) => { if (active) setUpdateStatus(status); });
     return api.onUpdateStatus((status) => { if (active) setUpdateStatus(status); });
-  }, []);
-
-  // Secure MCP Tunnel 是可选备用通道；状态轮询不影响原有 API、抓取和素材库。
-  useEffect(() => {
-    let active = true;
-    const refreshTunnel = () => api.tunnelStatus().then((value) => {
-      if (!active) return;
-      setTunnelStatus(value);
-      setTunnelIdInput((current) => current || value.tunnelId || '');
-    }).catch(() => {});
-    void refreshTunnel();
-    const timer = window.setInterval(refreshTunnel, 3_000);
-    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
   useEffect(() => {
@@ -77,86 +58,6 @@ export default function Settings() {
     void api.getAppVersion().then((version) => { if (active) setAppVersion(version); });
     return () => { active = false; };
   }, []);
-
-  // MCP 是工作台的备用入口；这里仅显示本机地址和健康状态，不把 Key 或认证信息暴露到前端。
-  useEffect(() => {
-    let active = true;
-    const refreshMcp = async () => {
-      try {
-        const base = await getApiBase();
-        const endpoint = `${base}/mcp`;
-        const response = await fetch(`${endpoint}/health`, { cache: 'no-store' });
-        if (active) {
-          setMcpEndpoint(endpoint);
-          setMcpOnline(response.ok);
-        }
-      } catch {
-        if (active) setMcpOnline(false);
-      }
-    };
-    void refreshMcp();
-    const timer = window.setInterval(refreshMcp, 10_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
-
-  async function copyMcpEndpoint() {
-    if (!mcpEndpoint) return toast('MCP 地址尚未准备好，请稍候', 'warning');
-    try {
-      await navigator.clipboard.writeText(mcpEndpoint);
-      toast('MCP 本机地址已复制', 'success');
-    } catch {
-      toast('复制失败，请手动选中地址复制', 'warning');
-    }
-  }
-
-  async function saveAndConnectTunnel() {
-    const tunnelId = tunnelIdInput.trim();
-    if (!tunnelId) return toast('请先填写 Tunnel ID', 'warning');
-    if (!tunnelKeyInput.trim() && !tunnelStatus?.keyConfigured) return toast('首次配置需要填写运行 API Key', 'warning');
-    setTunnelBusy(true);
-    try {
-      let status = (await api.setTunnelConfig(tunnelId, tunnelKeyInput.trim())).status;
-      setTunnelKeyInput('');
-      if (!status.installed) {
-        status = await api.installTunnelClient();
-      }
-      if (status.configured && status.installed) {
-        status = await api.connectTunnel();
-      }
-      setTunnelStatus(status);
-      toast(status.phase === 'ready' ? 'Secure MCP Tunnel 已连接' : status.message, status.phase === 'ready' ? 'success' : 'warning');
-    } catch (e: any) {
-      toast(e?.message || 'Tunnel 配置或连接失败', 'danger');
-      void api.tunnelStatus().then(setTunnelStatus).catch(() => {});
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  async function installTunnelOnly() {
-    setTunnelBusy(true);
-    try {
-      const status = await api.installTunnelClient();
-      setTunnelStatus(status);
-      toast(status.message, status.phase === 'error' ? 'danger' : 'success');
-    } catch (e: any) {
-      toast(e?.message || 'tunnel-client 安装失败', 'danger');
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
-
-  async function disconnectTunnel() {
-    setTunnelBusy(true);
-    try {
-      setTunnelStatus(await api.disconnectTunnel());
-      toast('Secure MCP Tunnel 已断开', 'success');
-    } catch (e: any) {
-      toast(e?.message || '断开 Tunnel 失败', 'danger');
-    } finally {
-      setTunnelBusy(false);
-    }
-  }
 
   // 拉取各平台抓取登录态
   useEffect(() => {
@@ -270,8 +171,44 @@ export default function Settings() {
   const capMeta = (cap: CapId) => {
     const def = CAP_SLOTS[cap];
     const sum = settings?.caps.find((c) => c.cap === cap);
-    return { def, configured: sum?.configured ?? false, verified: sum?.verified ?? false, model: sum?.model ?? def.defaultModel };
+    const provider = getProviderDef(cap, sum?.provider);
+    const providerOptions = sum?.providerOptions ?? getProviderOptions(cap).map((item) => ({
+      id: item.id,
+      label: item.label,
+      portal: item.portal,
+      models: [item.defaultModel, ...item.alternatives],
+      modelLabels: item.modelLabels ?? {},
+    }));
+    const models = sum?.models ?? [provider.defaultModel, ...provider.alternatives];
+    return {
+      def,
+      provider,
+      providerOptions,
+      configured: sum?.configured ?? false,
+      verified: sum?.verified ?? false,
+      model: sum?.model && models.includes(sum.model) ? sum.model : provider.defaultModel,
+      models,
+      modelLabels: sum?.modelLabels ?? provider.modelLabels ?? {},
+    };
   };
+
+  async function changeProvider(cap: CapId, providerId: string) {
+    try {
+      await api.setProvider(cap, providerId);
+      setCapState((s) => {
+        const next = { ...s };
+        delete next[cap];
+        return next;
+      });
+      setEditingCap((s) => ({ ...s, [cap]: false }));
+      setKeys((s) => ({ ...s, [cap]: '' }));
+      await api.getSettings().then(setSettings);
+      const provider = getProviderOptions(cap).find((item) => item.id === providerId);
+      toast(`${CAP_SLOTS[cap].label} 已切换至${provider?.label || providerId}`, 'success');
+    } catch (e: any) {
+      toast(e?.message || '切换供应商失败', 'danger');
+    }
+  }
 
   async function saveKey(cap: CapId) {
     const key = (keys[cap] ?? '').trim();
@@ -325,6 +262,25 @@ export default function Settings() {
     }
   }
 
+  async function chooseXhsDownloadDir() {
+    const chosen = await api.chooseXhsDownloadDir();
+    if (chosen) setXhsDownloadDirInput(chosen);
+  }
+
+  async function saveXhsDownloadDir() {
+    const value = xhsDownloadDirInput.trim();
+    setSavingXhsDownloadDir(true);
+    try {
+      const result = await api.setXhsDownloadDir(value);
+      await api.getSettings().then(setSettings);
+      toast(value ? `小红书洗稿解析目录已固定：${result.xhsDownloadDir}` : '已恢复使用下载服务默认目录', 'success');
+    } catch (e: any) {
+      toast(e?.message || '保存小红书解析目录失败', 'danger');
+    } finally {
+      setSavingXhsDownloadDir(false);
+    }
+  }
+
   return (
     <div className="settings-wrap">
       <div className="warn-box">
@@ -354,7 +310,7 @@ export default function Settings() {
           </div>
 
           {Object.values(CAP_SLOTS).map((def) => {
-            const { configured, verified, model } = capMeta(def.id);
+            const { configured, verified, model, provider, providerOptions, models, modelLabels } = capMeta(def.id);
             const status = capState[def.id] ?? (verified ? 'verified' : configured ? 'saved' : null);
             const keyLocked = configured && !editingCap[def.id];
             return (
@@ -364,10 +320,26 @@ export default function Settings() {
                     {def.label}
                     {def.locked && <span className="lock-tag">固定</span>}
                   </div>
-                  <div className="s-d">{def.id === 'image' ? `AIHubMix · ${model} · OpenAI 兼容接口` : def.keyId}</div>
+                  <div className="s-d">{provider.label} · {model}{def.kind === 'image' ? ' · OpenAI 兼容接口' : ''}</div>
                 </div>
-                <a className="cap-key-link" href={API_KEY_PORTALS[def.id]} target="_blank" rel="noreferrer">点击获取 API Key</a>
-                <div className="cap-ctl">
+                <a className="cap-key-link" href={provider.portal || '#'} target="_blank" rel="noreferrer">点击获取 API Key</a>
+                <div className={`cap-ctl ${providerOptions.length ? 'has-provider' : ''}`}>
+                  {providerOptions.length > 0 && (
+                    <Select
+                      className="cap-select cap-provider-select"
+                      aria-label={`${def.label}供应商`}
+                      selectedKeys={new Set([provider.id])}
+                      disallowEmptySelection
+                      isDisabled={def.locked || providerOptions.length < 2}
+                      size="sm"
+                      onSelectionChange={(k) => {
+                        const v = [...k][0] as string;
+                        if (v && v !== provider.id) void changeProvider(def.id, v);
+                      }}
+                    >
+                      {providerOptions.map((item) => <SelectItem key={item.id}>{item.label}</SelectItem>)}
+                    </Select>
+                  )}
                   <Select
                     className="cap-select"
                     selectedKeys={new Set([model])}
@@ -379,15 +351,15 @@ export default function Settings() {
                       api.setSupplier(def.id, v).then(() => api.getSettings().then(setSettings));
                     }}
                   >
-                    {[def.defaultModel, ...def.alternatives].map((m) => (
-                      <SelectItem key={m}>{m}</SelectItem>
+                    {models.map((m) => (
+                      <SelectItem key={m}>{modelLabels[m] ?? m}</SelectItem>
                     ))}
                   </Select>
                   <Input
                     className="cap-input"
                     type={keyLocked ? 'text' : 'password'}
                     isReadOnly={keyLocked}
-                    placeholder={def.id === 'image' ? 'sk-...（AIHubMix）' : `sk-...（${def.keyId}）`}
+                    placeholder={`sk-...（${provider.label}）`}
                     value={keyLocked ? '••••••••••••••••' : keys[def.id] ?? ''}
                     onValueChange={(v) => setKeys((s) => ({ ...s, [def.id]: v }))}
                     size="sm"
@@ -451,6 +423,28 @@ export default function Settings() {
             {!runtime?.ready && runtime?.packaged && <Button size="sm" color="primary" isLoading={runtimeInstalling || !!runtime?.installing} onPress={installRuntime}>安装环境</Button>}
           </div>
           <div className="tiny" style={{ color: 'var(--text-3)' }}>{runtime?.message || '正在检测本机环境…'}</div>
+          <div className="set-row xhs-download-dir-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div className="s-main" style={{ minWidth: 260 }}>
+              <div className="s-t">小红书洗稿解析目录</div>
+              <div className="s-d">下载后的图片和文案会保存到这里，洗稿解析也从这里读取。固定后可避免下载服务与工作台目录不一致。</div>
+            </div>
+            <div style={{ display: 'flex', flex: '1 1 420px', minWidth: 280, gap: 8, alignItems: 'center' }}>
+              <Input
+                value={xhsDownloadDirInput}
+                onValueChange={setXhsDownloadDirInput}
+                placeholder="未固定，使用下载服务默认目录"
+                size="sm"
+                aria-label="小红书洗稿解析目录"
+                className="rootdir-input"
+              />
+              <Button size="sm" variant="bordered" className="topic-outline-button" onPress={() => void chooseXhsDownloadDir()}>选择</Button>
+              <Button size="sm" color="primary" isLoading={savingXhsDownloadDir} onPress={() => void saveXhsDownloadDir()}>保存</Button>
+            </div>
+          </div>
+          <div className="tiny" style={{ color: 'var(--text-3)', marginTop: 6 }}>
+            当前目录：<span style={{ fontFamily: 'var(--mono)' }}>{settings?.xhsDownloadDir || '下载服务默认目录'}</span>
+            {settings?.xhsDownloadDir && <Button size="sm" variant="light" onPress={() => { setXhsDownloadDirInput(''); void saveXhsDownloadDir(); }} style={{ marginLeft: 8, minWidth: 0, height: 24, padding: '0 6px' }}>恢复默认</Button>}
+          </div>
         </div>
       </div>
 
@@ -476,74 +470,6 @@ export default function Settings() {
             <span className="set-status ok" aria-label="安全调用已启用">
               <Icon name="check" className="ic" size={14} /> 已启用
             </span>
-          </div>
-        </div>
-      </div>
-
-      {/* 网页 ChatGPT MCP 备用入口 */}
-      <div className="panel">
-        <div className="panel-head">
-          <h3><Icon name="spark" className="ic" size={18} /> 网页 ChatGPT 连接（MCP）</h3>
-          <div className="spacer" />
-          <span className={`set-status ${mcpOnline ? 'ok' : mcpOnline === false ? 'no' : ''}`}>
-            <Icon name={mcpOnline ? 'check' : 'alert'} className="ic" size={14} />
-            {mcpOnline ? '本机服务已就绪' : mcpOnline === false ? '本机服务未连接' : '检测中'}
-          </span>
-        </div>
-        <div className="panel-body">
-          <div className="set-row" style={{ border: 'none' }}>
-            <div className="s-main">
-              <div className="s-t">MCP 本机地址</div>
-              <div className="s-d">这是工作台提供给网页 ChatGPT 的备用工作流入口。网页端不能直接访问 localhost，需要通过受信任的 HTTPS 隧道转发后再添加连接器。</div>
-              <div className="s-d" style={{ fontFamily: 'var(--mono)', marginTop: 8, wordBreak: 'break-all' }}>
-                {mcpEndpoint || '正在读取本机地址…'}
-              </div>
-            </div>
-            <Button size="sm" variant="bordered" className="topic-outline-button" isDisabled={!mcpEndpoint} onPress={() => void copyMcpEndpoint()}>
-              复制地址
-            </Button>
-          </div>
-          <div className="tiny" style={{ color: 'var(--text-3)' }}>
-            当前最小闭环：网页 ChatGPT 负责校对与改写，工作台负责链接解析、状态门和 Word 导出；不会把 Cookie、API Key 或本机文件路径发送到网页端。
-          </div>
-          <div className="set-row" style={{ display: 'block', border: 'none', paddingBottom: 0 }}>
-            <div className="s-main">
-              <div className="s-t">Secure MCP Tunnel（可选）</div>
-              <div className="s-d">
-                让网页 ChatGPT 通过 OpenAI 的出站隧道访问本机 MCP。工作台会检测并按需下载官方 tunnel-client；运行 API Key 只会加密保存在本机，不会显示或上传。
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, marginTop: 12 }}>
-              <Input
-                size="sm"
-                label="Tunnel ID"
-                placeholder="tunnel_…"
-                value={tunnelIdInput}
-                onValueChange={setTunnelIdInput}
-                aria-label="Tunnel ID"
-              />
-              <Input
-                size="sm"
-                type="password"
-                label="运行 API Key"
-                placeholder={tunnelStatus?.keyConfigured ? '已配置，如需更换请重新填写' : '粘贴 Runtime API Key'}
-                value={tunnelKeyInput}
-                onValueChange={setTunnelKeyInput}
-                aria-label="运行 API Key"
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-              <Button size="sm" color="primary" isLoading={tunnelBusy} onPress={() => void saveAndConnectTunnel()}>
-                {tunnelStatus?.installed ? '保存并连接' : '安装并连接'}
-              </Button>
-              {!tunnelStatus?.installed && <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={tunnelBusy} onPress={() => void installTunnelOnly()}>仅安装运行环境</Button>}
-              {tunnelStatus?.running && <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={tunnelBusy} onPress={() => void disconnectTunnel()}>断开</Button>}
-              <span className={`set-status ${tunnelStatus?.phase === 'ready' ? 'ok' : tunnelStatus?.phase === 'error' ? 'no' : ''}`}>
-                <Icon name={tunnelStatus?.phase === 'ready' ? 'check' : 'alert'} className="ic" size={14} />
-                {tunnelStatus?.phase === 'downloading' ? `${tunnelStatus.message} ${tunnelStatus.percent ?? 0}%` : tunnelStatus?.message || '正在检测 tunnel-client…'}
-              </span>
-              <a href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent-ink)' }}>打开 Tunnel 管理</a>
-            </div>
           </div>
         </div>
       </div>

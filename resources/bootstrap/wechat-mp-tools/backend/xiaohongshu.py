@@ -39,6 +39,16 @@ XHS_DIR = DATA_DIR / "xhs_downloads"
 XHS_ACCOUNTS_FILE = DATA_DIR / "xhs_accounts.json"
 XHS_HISTORY_FILE = DATA_DIR / "xhs_history.json"
 
+
+def get_xhs_download_dir() -> Path:
+    """读取工作台固定的小红书目录；设置变更后无需重启 Python 服务。"""
+    configured = str(get_settings().get("xhs_download_dir") or "").strip()
+    if configured:
+        target = Path(configured).expanduser()
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    return XHS_DIR
+
 # ── 任务管理器 ────────────────────────────────────────────
 _download_tasks = {}
 _download_lock = threading.Lock()
@@ -1038,8 +1048,18 @@ def check_xhs_login(cookie: str) -> dict:
 def _do_xhs_download_thread(task_id: str, urls: list, account_name: str):
     client = XhsClient()
     history = load_json(XHS_HISTORY_FILE, [])
+    xhs_download_dir = get_xhs_download_dir()
     
-    downloaded_ids = {item.get("note_id") for item in history if isinstance(item, dict) and item.get("success")}
+    # 历史记录可能残留在目录被用户移动/清理之后；只有对应目录真实存在时才跳过，
+    # 否则会返回 skipped 但没有可供工作台导入的 path，造成“下载完成但找不到目录”。
+    downloaded_ids = {
+        item.get("note_id")
+        for item in history
+        if isinstance(item, dict)
+        and item.get("success")
+        and item.get("note_id")
+        and Path(str(item.get("path") or "")).is_dir()
+    }
     
     for idx, url in enumerate(urls):
         with _download_lock:
@@ -1079,7 +1099,7 @@ def _do_xhs_download_thread(task_id: str, urls: list, account_name: str):
             pub_date = detail["publish_time"].split()[0]
             clean_title = clean_filename(detail["title"]) or detail["note_id"]
             
-            note_dir = XHS_DIR / author_nick / f"{pub_date}_{clean_title}"
+            note_dir = xhs_download_dir / author_nick / f"{pub_date}_{clean_title}"
             note_dir.mkdir(parents=True, exist_ok=True)
 
             # 写入笔记文字内容（标题/正文/标签/数据），与媒体文件一同保存
@@ -1486,7 +1506,7 @@ def open_folder():
     data = request.get_json() or {}
     account = data.get("account", "").strip()
     
-    path = XHS_DIR
+    path = get_xhs_download_dir()
     if account:
         path = path / clean_filename(account)
         

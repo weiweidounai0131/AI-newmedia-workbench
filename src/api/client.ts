@@ -9,6 +9,7 @@ declare global {
       getApiBase: () => Promise<string>;
       getAppVersion?: () => Promise<string>;
       chooseLibraryRoot?: () => Promise<string | null>;
+      chooseXhsDownloadDir?: () => Promise<string | null>;
       checkForUpdates?: () => Promise<{ ok: boolean; reason?: string }>;
       getUpdateStatus?: () => Promise<UpdateStatus>;
       onUpdateStatus?: (callback: (status: UpdateStatus) => void) => () => void;
@@ -41,7 +42,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 interface SettingsResp {
   rootDir: string | null;
-  mcpTunnel?: { configured: boolean; tunnelId: string | null; keyConfigured: boolean };
+  xhsDownloadDir: string | null;
   suppliers: Record<string, string>;
   caps: CapSummary[];
 }
@@ -70,18 +71,6 @@ interface RuntimeSetupResp {
   phase: string;
   message: string;
   components: { id: string; label: string; ready: boolean; detail: string }[];
-}
-export interface TunnelClientStatus {
-  phase: 'unconfigured' | 'missing' | 'stopped' | 'downloading' | 'starting' | 'ready' | 'error';
-  configured: boolean;
-  keyConfigured: boolean;
-  tunnelId: string | null;
-  installed: boolean;
-  running: boolean;
-  healthy: boolean;
-  version?: string;
-  percent?: number;
-  message: string;
 }
 export interface UpdateStatus {
   phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
@@ -125,16 +114,13 @@ export interface PlatformCooldowns {
 export const api = {
   getSettings: () => req<SettingsResp>('/api/settings'),
   setKey: (cap: CapId, key: string) => req<BasicResp>('/api/settings/key', { method: 'POST', body: JSON.stringify({ cap, key }) }),
+  setProvider: (cap: CapId, provider: string) => req<BasicResp>('/api/settings/provider', { method: 'POST', body: JSON.stringify({ cap, provider }) }),
   setSupplier: (cap: CapId, model: string) => req<BasicResp>('/api/settings/supplier', { method: 'POST', body: JSON.stringify({ cap, model }) }),
   setRootDir: (rootDir: string) => req<BasicResp>('/api/settings/rootdir', { method: 'POST', body: JSON.stringify({ rootDir }) }),
+  setXhsDownloadDir: (xhsDownloadDir: string) => req<{ ok: boolean; xhsDownloadDir: string | null; synced?: boolean }>('/api/settings/xhs-download-dir', { method: 'POST', body: JSON.stringify({ xhsDownloadDir }) }),
   verifyCap: (cap: CapId) => req<VerifyResp>('/api/settings/verify', { method: 'POST', body: JSON.stringify({ cap }) }),
   runtimeStatus: () => req<RuntimeSetupResp>('/api/settings/runtime'),
   installRuntime: () => req<RuntimeSetupResp>('/api/settings/runtime/install', { method: 'POST' }),
-  tunnelStatus: () => req<TunnelClientStatus>('/api/settings/tunnel'),
-  setTunnelConfig: (tunnelId: string, runtimeApiKey: string) => req<{ ok: boolean; status: TunnelClientStatus }>('/api/settings/tunnel/config', { method: 'POST', body: JSON.stringify({ tunnelId, runtimeApiKey }) }),
-  installTunnelClient: () => req<TunnelClientStatus>('/api/settings/tunnel/install', { method: 'POST' }),
-  connectTunnel: () => req<TunnelClientStatus>('/api/settings/tunnel/connect', { method: 'POST' }),
-  disconnectTunnel: () => req<TunnelClientStatus>('/api/settings/tunnel/disconnect', { method: 'POST' }),
   genTishici: (body: any) => req<TishiciResp>('/api/ai/tishici', { method: 'POST', body: JSON.stringify(body) }),
   xigaoRecognize: (body: any) => req<XigaoResp>('/api/ai/xigao/recognize', { method: 'POST', body: JSON.stringify(body) }),
   xigaoRewrite: (body: any) => req<XigaoResp>('/api/ai/xigao/rewrite', { method: 'POST', body: JSON.stringify(body) }),
@@ -149,6 +135,7 @@ export const api = {
   initializeLibrary: () => req<{ rootDir: string | null; missingFolders: ('选题' | '创意' | '洗稿' | '图片')[]; ready: boolean; files: LibFile[] }>('/api/library/initialize', { method: 'POST' }),
   openLibraryFile: (folder: string, name: string, reveal = false) => req<{ ok: boolean }>('/api/library/open', { method: 'POST', body: JSON.stringify({ folder, name, reveal }) }),
   chooseLibraryRoot: () => window.api?.chooseLibraryRoot ? window.api.chooseLibraryRoot() : Promise.resolve(null),
+  chooseXhsDownloadDir: () => window.api?.chooseXhsDownloadDir ? window.api.chooseXhsDownloadDir() : Promise.resolve(null),
   getAppVersion: () => window.api?.getAppVersion ? window.api.getAppVersion() : Promise.resolve('开发版'),
   checkForUpdates: () => window.api?.checkForUpdates
     ? window.api.checkForUpdates()

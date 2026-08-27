@@ -31,6 +31,9 @@ import { recognize, type VisionPart } from './aiProxy.js';
 import { acquirePlatformAction, markRiskControl } from './cooldown.js';
 import { localMediaToVisionParts } from './localMedia.js';
 import { extractHttpUrl } from './link.js';
+import { bundledRuntimeRoot, userRuntimeDataDir } from './runtimePaths.js';
+import { isKnownXhsDownloadDir } from './downloadPaths.js';
+import { settings } from './settings.js';
 
 // ---- 平台配置（与代理 / 前端用中文名契约） ----
 export const SCRAPE_PLATFORMS = ['抖音', '小红书', '微博', '知乎'] as const;
@@ -194,7 +197,7 @@ interface AcquiredSource {
 
 /**
  * 返回链接检查阶段保存的非敏感来源摘要。
- * MCP 工作流需要把可读文字交给网页端模型，但不能暴露本机文件路径、Cookie
+ * 上层流程需要把可读文字交给模型，但不能暴露本机文件路径、Cookie
  * 或浏览器 profile；图片/视频只返回数量和状态，二进制仍留在本机识别链路。
  */
 export interface SourceSnapshot {
@@ -498,17 +501,29 @@ export function importDouyinVideo(filePath: string, title?: string): RecognizeLi
 }
 
 /** 将 wechat-mp-tools 下载的小红书图文目录（图片 + 文案.txt）纳入当前洗稿任务。 */
-export function importXhsNote(noteDir: string, title?: string): RecognizeLinkResult {
+export async function importXhsNote(noteDir: string, title?: string): Promise<RecognizeLinkResult> {
   const normalized = path.resolve(noteDir || '');
   // 下载工具有两种合法运行形态：用户已安装的桌面版，以及工作台自动拉起的
   // 项目内置服务。两者的数据根目录不同，但均为受控本机目录。
+  const runtimeData = await userRuntimeDataDir();
+  const bundled = await bundledRuntimeRoot();
   const toolRoot = path.resolve(process.env.WECHAT_MP_TOOLS_ROOT || path.join(process.cwd(), 'tools', 'wechat-mp-tools'));
+  const configuredDataRoot = process.env.WECHAT_MP_TOOLS_DATA_DIR;
   const roots = [
     process.env.WECHAT_MP_TOOLS_XHS_DOWNLOAD_DIR,
-    path.join(os.homedir(), 'Library', 'Application Support', 'WeChat MP Tools', 'data', 'xhs_downloads'),
+    settings.xhsDownloadDir,
+    configuredDataRoot && path.join(configuredDataRoot, 'xhs_downloads'),
+    configuredDataRoot && path.join(configuredDataRoot, 'data', 'xhs_downloads'),
+    path.join(runtimeData, 'wechat-mp-tools', 'xhs_downloads'),
+    path.join(runtimeData, 'wechat-mp-tools', 'data', 'xhs_downloads'),
+    process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support', 'WeChat MP Tools', 'data', 'xhs_downloads')
+      : path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'WeChat MP Tools', 'data', 'xhs_downloads'),
     path.join(toolRoot, 'data', 'xhs_downloads'),
+    bundled && path.join(bundled, 'wechat-mp-tools', 'data', 'xhs_downloads'),
   ].filter(Boolean).map((root) => path.resolve(root as string));
-  if (!roots.some((root) => normalized !== root && normalized.startsWith(`${root}${path.sep}`))) {
+  const inConfiguredRoot = roots.some((root) => normalized !== root && normalized.startsWith(`${root}${path.sep}`));
+  if (!inConfiguredRoot && !isKnownXhsDownloadDir(normalized)) {
     throw new ScrapeError('invalid_download_path', '下载目录不在已配置的 wechat-mp-tools 小红书图文目录中');
   }
   if (!fs.existsSync(normalized) || !fs.statSync(normalized).isDirectory()) {
