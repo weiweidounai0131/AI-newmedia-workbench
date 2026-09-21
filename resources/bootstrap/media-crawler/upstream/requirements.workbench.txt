@@ -3,6 +3,8 @@
 httpx==0.28.1
 pillow>=12.2.0
 playwright>=1.61.0
+# 抖音登录仍保留滑块验证码兼容；slider_util 在运行时需要 OpenCV。
+opencv-python>=4.10
 tenacity==8.2.2
 typer>=0.12.3
 pydantic>=2.13.4
