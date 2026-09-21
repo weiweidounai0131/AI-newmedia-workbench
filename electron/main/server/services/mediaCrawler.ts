@@ -91,7 +91,12 @@ function dataDir(): string {
 /** 返回 venv python 可执行文件绝对路径 */
 async function venvPython(): Promise<string> {
   const bundled = await bundledRuntimeRoot();
-  if (bundled) return pythonExecutable(path.join(bundled, 'media-crawler', 'venv'));
+  if (bundled) {
+    const shared = pythonExecutable(path.join(bundled, 'python'));
+    if (fs.existsSync(shared)) return shared;
+    // 兼容旧版已安装运行环境，升级过程中仍可回退。
+    return pythonExecutable(path.join(bundled, 'media-crawler', 'venv'));
+  }
   return path.join(
     process.env.HOME || process.env.USERPROFILE || os.homedir(),
     '.workbuddy',
@@ -328,13 +333,14 @@ export async function upstreamVideoDetail(platform: string, link: string): Promi
   // 不能在这里要求链接本身已经包含 /video/数字ID。小红书仍需从 URL 提取 note_id。
   if (!config.id && platform !== '抖音') return { error: `未能从${platform}链接中识别内容 ID` };
   const root = await upstreamRoot();
-  if (!fs.existsSync(path.join(root, 'main.py'))) return { error: 'MediaCrawler 上游组件未安装' };
+  const entry = fs.existsSync(path.join(root, 'workbench_main.py')) ? 'workbench_main.py' : 'main.py';
+  if (!fs.existsSync(path.join(root, entry))) return { error: 'MediaCrawler 上游组件未安装' };
   const outputRoot = await upstreamDataRoot(root);
   const file = path.join(outputRoot, config.folder, 'json', `detail_contents_${today()}.json`);
   const previousMtime = fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;
   try {
     const output = await run(await venvPython(), [
-      'main.py',
+      entry,
       '--platform', config.key,
       '--type', 'detail',
       '--specified_id', link,
@@ -444,7 +450,8 @@ function fullCount(value: unknown): string {
 export async function upstreamSearch(platform: string, kw: string, limit = 20): Promise<McSearchResult> {
   const key = UPSTREAM_PLATFORM[platform];
   const root = await upstreamRoot();
-  if (!key || !fs.existsSync(path.join(root, 'main.py'))) {
+  const entry = fs.existsSync(path.join(root, 'workbench_main.py')) ? 'workbench_main.py' : 'main.py';
+  if (!key || !fs.existsSync(path.join(root, entry))) {
     return { items: [], live: false, reason: 'upstream_missing', message: 'MediaCrawler 上游组件未安装' };
   }
   try {
@@ -454,7 +461,7 @@ export async function upstreamSearch(platform: string, kw: string, limit = 20): 
     // 上游 JSON 默认会按日期追加；一次网页搜索只应读取本次任务结果。
     if (fs.existsSync(file)) fs.unlinkSync(file);
     await run(await venvPython(), [
-      'main.py',
+      entry,
       '--platform', key,
       '--type', 'search',
       '--keywords', kw,
