@@ -106,6 +106,16 @@ async function run() {
   const imgPart = c.body?.messages?.[0]?.content?.find((p: any) => p.type === 'image_url');
   check('visionImg 含 image_url part', !!imgPart, JSON.stringify(c.body?.messages?.[0]?.content));
 
+  // 图文识别也支持 DeepSeek 原生多模态；切换后仍保持标准 image_url 请求体。
+  err = settings.setProvider('visionImg', 'deepseek');
+  check('visionImg 切换到 DeepSeek', !err && settings.providerId('visionImg') === 'deepseek', err ?? '');
+  c = await capture('visionImg', (f) => recognize({ cap: 'visionImg', parts: [{ type: 'image', data: 'xx', mime: 'image/jpeg' }] }, f));
+  check('visionImg DeepSeek 路由', c.url === 'https://api.deepseek.com/chat/completions', c.url);
+  check('visionImg DeepSeek 模型=deepseek-flash', c.body?.model === 'deepseek-flash', c.body?.model);
+  const deepseekImgPart = c.body?.messages?.[0]?.content?.find((p: any) => p.type === 'image_url');
+  check('visionImg DeepSeek 含 image_url part', !!deepseekImgPart, JSON.stringify(c.body?.messages?.[0]?.content));
+  settings.setProvider('visionImg', 'zhipu');
+
   // visionVideo
   c = await capture('visionVideo', (f) => recognize({ cap: 'visionVideo', parts: [{ type: 'video', data: 'xx', mime: 'video/mp4' }] }, f));
   check('visionVideo 路由到通义', c.url === 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', c.url);

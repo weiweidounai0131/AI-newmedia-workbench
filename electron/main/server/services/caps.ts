@@ -79,6 +79,19 @@ const ZHIPU_VISION_PROVIDER: ProviderDef = {
   portal: 'https://open.bigmodel.cn/',
 };
 
+const DEEPSEEK_VISION_PROVIDER: ProviderDef = {
+  id: 'deepseek',
+  label: 'DeepSeek',
+  keyId: 'deepseek',
+  baseURL: 'https://api.deepseek.com',
+  defaultModel: 'deepseek-flash',
+  alternatives: [],
+  portal: 'https://platform.deepseek.com/',
+  modelLabels: {
+    'deepseek-flash': 'DeepSeek Flash',
+  },
+};
+
 const QWEN_VISION_PROVIDER: ProviderDef = {
   id: 'qwen',
   label: '通义千问',
@@ -131,7 +144,7 @@ export const CAP_SLOTS: Record<CapId, CapDef> = {
     alternatives: ['glm-4v-plus'],
     kind: 'chat',
     locked: false,
-    providers: [ZHIPU_VISION_PROVIDER],
+    providers: [ZHIPU_VISION_PROVIDER, DEEPSEEK_VISION_PROVIDER],
     defaultProvider: 'zhipu',
   },
   visionVideo: {
