@@ -32,6 +32,18 @@ extraResources:
     to: resources
     filter:
       - "bootstrap/**"
+      # MediaCrawler 上游仓库中的文档、测试与 WebUI 不参与工作台运行。
+      - "!bootstrap/media-crawler/upstream/.github/**"
+      - "!bootstrap/media-crawler/upstream/docs/**"
+      - "!bootstrap/media-crawler/upstream/tests/**"
+      - "!bootstrap/media-crawler/upstream/test/**"
+      - "!bootstrap/media-crawler/upstream/webui/**"
+      - "!bootstrap/media-crawler/upstream/media_platform/tieba/test_data/**"
+      # wechat-mp-tools 只由 workbench_app.py 提供抖音/小红书下载服务。
+      - "!bootstrap/wechat-mp-tools/.github/**"
+      - "!bootstrap/wechat-mp-tools/docs/**"
+      - "!bootstrap/wechat-mp-tools/frontend/**"
+      - "!bootstrap/wechat-mp-tools/backend/subtitle_remover/**"
       - "licenses/**"
       - "THIRD_PARTY_NOTICES.md"
       - "update-source.json"
