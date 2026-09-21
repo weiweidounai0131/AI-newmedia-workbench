@@ -23,12 +23,18 @@ afterPack: scripts/adhoc-sign-mac.cjs
 files:
   - out/**/*
   - package.json
+# 运行时资源采用白名单。resources 同时包含大量仅供构建使用的图标源文件、
+# iconset 与设计素材；这些不应被重复复制到安装后的 App Resources。
+# bootstrap 是首次安装本机抓取/下载运行环境所必需；update-source.json 由 CI
+# 在已配置更新源时动态生成，必须允许进入最终包。
 extraResources:
   - from: resources
     to: resources
     filter:
-      - "**/*"
-      - "!runtime/**"
+      - "bootstrap/**"
+      - "licenses/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - "update-source.json"
 mac:
   target:
     - dmg
