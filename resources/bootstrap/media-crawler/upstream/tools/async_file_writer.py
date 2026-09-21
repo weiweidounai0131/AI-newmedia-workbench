@@ -25,14 +25,17 @@ from typing import Dict, List
 import aiofiles
 import config
 from tools.utils import utils
-from tools.words import AsyncWordCloudGenerator
 
 class AsyncFileWriter:
     def __init__(self, platform: str, crawler_type: str):
         self.lock = asyncio.Lock()
         self.platform = platform
         self.crawler_type = crawler_type
-        self.wordcloud_generator = AsyncWordCloudGenerator() if config.ENABLE_GET_WORDCLOUD else None
+        self.wordcloud_generator = None
+        if config.ENABLE_GET_WORDCLOUD:
+            # 工作台运行时关闭词云；只有显式开启时才加载 matplotlib/wordcloud/jieba。
+            from tools.words import AsyncWordCloudGenerator
+            self.wordcloud_generator = AsyncWordCloudGenerator()
 
     def _get_file_path(self, file_type: str, item_type: str) -> str:
         if config.SAVE_DATA_PATH:
