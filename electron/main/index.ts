@@ -7,7 +7,7 @@ import { startMediaCrawler } from './server/services/mediaCrawler.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,8 @@ let fallbackDownloadPending = false;
 let fallbackDownloadAttempted = false;
 
 const LEGACY_MAC_UPDATE_JOB_PREFIX = 'com.newmedia.workbench.update.';
+const UPDATE_CACHE_DIR_NAME = 'newmedia-workbench-updater';
+let updaterConfigPathPrepared = false;
 
 type UpdateSource = { provider?: string; url?: string; fallbackUrl?: string; timeoutMs?: number };
 type ResolvedUpdateSource = {
@@ -81,14 +83,16 @@ async function cleanupLegacyMacUpdateJobs(): Promise<void> {
 }
 
 /** macOS 在应用退出后以一次性独立脚本回滚式替换 App，避免安装器静默失败。 */
-async function installMacUpdate(): Promise<void> {
+async function installMacUpdate(downloadedFile: string): Promise<void> {
   if (macUpdateInstallStarted) return;
   macUpdateInstallStarted = true;
 
-  // electron-updater 的 macOS 下载目录以 userData 的目录名为基础。
-  // Electron 32 的 TypeScript 类型未公开 getPath('cache')，故显式取系统缓存目录。
-  const cacheDir = path.join(app.getPath('home'), 'Library', 'Caches', `${path.basename(app.getPath('userData'))}-updater`);
-  const zipPath = path.join(cacheDir, 'update.zip');
+  // 直接使用 electron-updater 回调提供的实际下载文件，避免缓存目录名称或文件名
+  // 变化后安装脚本找不到 update.zip。
+  const zipPath = path.resolve(downloadedFile);
+  const cacheDir = path.dirname(path.dirname(zipPath));
+  const zipStat = await stat(zipPath);
+  if (!zipStat.isFile() || zipStat.size <= 0) throw new Error(`更新文件不存在或为空：${zipPath}`);
   const targetApp = path.resolve(process.execPath, '../../..');
   const stagingDir = path.join(cacheDir, `install-${Date.now()}`);
   const scriptPath = path.join(cacheDir, `apply-update-${Date.now()}.sh`);
@@ -126,6 +130,16 @@ async function readUpdateSource(): Promise<ResolvedUpdateSource | null> {
       const source = JSON.parse(raw) as UpdateSource;
       if (source.provider && source.provider !== 'generic') continue;
       if (typeof source.url !== 'string' || !/^https:\/\//i.test(source.url)) continue;
+      if (!updaterConfigPathPrepared) {
+        const updaterConfigPath = path.join(app.getPath('userData'), 'app-update.yml');
+        await writeFile(
+          updaterConfigPath,
+          `provider: generic\nurl: ${source.url.replace(/\s/g, '')}\nupdaterCacheDirName: ${UPDATE_CACHE_DIR_NAME}\n`,
+          'utf8',
+        );
+        autoUpdater.updateConfigPath = updaterConfigPath;
+        updaterConfigPathPrepared = true;
+      }
       const fallbackUrl = typeof source.fallbackUrl === 'string' && /^https:\/\//i.test(source.fallbackUrl)
         ? source.fallbackUrl.replace(/\/+$/, '')
         : undefined;
@@ -239,7 +253,8 @@ function bindUpdateEvents(): void {
     if (result.response === 0) {
       publishUpdateStatus({ phase: 'installing', percent: 100, version: info.version, message: '正在安装更新并重启…' });
       if (process.platform === 'darwin') {
-        void installMacUpdate().catch((error) => {
+        const downloadedFile = typeof info.downloadedFile === 'string' ? info.downloadedFile : '';
+        void installMacUpdate(downloadedFile).catch((error) => {
           macUpdateInstallStarted = false;
           publishUpdateStatus({ phase: 'error', percent: 100, version: info.version, message: '安装更新失败，请重新下载完整安装包。' });
           console.warn('[updater] macOS 安装更新失败：', error);
