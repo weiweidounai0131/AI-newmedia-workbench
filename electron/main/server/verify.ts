@@ -137,7 +137,7 @@ async function run() {
   err = settings.setProvider('image', 'sudocode');
   check('image 切换到 SudoCode', !err && settings.providerId('image') === 'sudocode', err ?? '');
   c = await capture('image', (f) => generateImage({ prompt: 'a poster' }, f));
-  check('image 经 SudoCode 网关', c.url === 'https://api.sudocode.chat/v1/images/generations', c.url);
+  check('image 经 SudoCode 备用直连网关', c.url === 'https://api.sudorelay.com/v1/images/generations', c.url);
   check('image SudoCode 模型=gpt-image-2', c.body?.model === 'gpt-image-2', c.body?.model);
   settings.setProvider('image', 'aihubmix');
 

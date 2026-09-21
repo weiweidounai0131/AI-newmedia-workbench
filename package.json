@@ -1,6 +1,6 @@
 {
   "name": "newmedia-workbench",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "AI新媒体工作台（Electron 桌面端）",
   "type": "module",
   "main": "out/main/index.cjs",

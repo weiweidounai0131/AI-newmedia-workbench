@@ -116,7 +116,8 @@ const SUDOCODE_IMAGE_PROVIDER: ProviderDef = {
   id: 'sudocode',
   label: 'SudoCode',
   keyId: 'sudocode',
-  baseURL: 'https://api.sudocode.chat/v1',
+  // 文档提供的备用直连节点；当前主节点在本机代理环境下鉴权请求会超时。
+  baseURL: 'https://api.sudorelay.com/v1',
   defaultModel: 'gpt-image-2',
   alternatives: [],
   portal: 'https://sudocode.chat/docs',
