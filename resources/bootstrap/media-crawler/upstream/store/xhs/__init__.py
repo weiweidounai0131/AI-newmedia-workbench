@@ -21,35 +21,51 @@
 # @Author  : relakkes@gmail.com
 # @Time    : 2024/1/14 17:34
 # @Desc    :
-from typing import List
+from typing import Dict, List
 
 import config
 from var import source_keyword_var
 from tools.user_hash import anonymize_user_id, mask_nickname
 
 from .xhs_store_media import *
-from ._store_impl import *
+from base.base_crawler import AbstractStore
+from tools import utils
+from tools.async_file_writer import AsyncFileWriter
+
+
+class _WorkbenchXhsFileStore(AbstractStore):
+    """工作台仅使用文件存储，避免导入 SQLAlchemy/MongoDB/Excel 依赖。"""
+
+    def __init__(self):
+        self.file_writer = AsyncFileWriter(
+            crawler_type=crawler_type_var.get(),
+            platform="xhs",
+        )
+
+    async def _write(self, item: Dict, item_type: str):
+        if config.SAVE_DATA_OPTION == "json":
+            await self.file_writer.write_single_item_to_json(item=item, item_type=item_type)
+        elif config.SAVE_DATA_OPTION == "jsonl":
+            await self.file_writer.write_to_jsonl(item=item, item_type=item_type)
+        elif config.SAVE_DATA_OPTION == "csv":
+            await self.file_writer.write_to_csv(item=item, item_type=item_type)
+        else:
+            raise ValueError("工作台 MediaCrawler Lite 仅支持 json/jsonl/csv")
+
+    async def store_content(self, content_item: Dict):
+        await self._write(content_item, "contents")
+
+    async def store_comment(self, comment_item: Dict):
+        await self._write(comment_item, "comments")
+
+    async def store_creator(self, creator_item: Dict):
+        return
 
 
 class XhsStoreFactory:
-    STORES = {
-        "csv": XhsCsvStoreImplement,
-        "db": XhsDbStoreImplement,
-        "postgres": XhsDbStoreImplement,
-        "json": XhsJsonStoreImplement,
-        "jsonl": XhsJsonlStoreImplement,
-        "sqlite": XhsSqliteStoreImplement,
-        "mongodb": XhsMongoStoreImplement,
-        "excel": XhsExcelStoreImplement,
-    }
-
     @staticmethod
     def create_store() -> AbstractStore:
-        store_class = XhsStoreFactory.STORES.get(config.SAVE_DATA_OPTION)
-        if not store_class:
-            raise ValueError("[XhsStoreFactory.create_store] Invalid save option only supported csv or db or json or sqlite or mongodb or excel ...")
-        return store_class()
-
+        return _WorkbenchXhsFileStore()
 
 def get_video_url_arr(note_item: Dict) -> List:
     """
