@@ -15,6 +15,7 @@ import config
 from media_platform.douyin import DouYinCrawler
 from media_platform.xhs import XiaoHongShuCrawler
 from tools.app_runner import run
+from var import crawler_type_var, source_keyword_var
 
 crawler: Optional[object] = None
 
@@ -41,6 +42,8 @@ def configure_from_args(args: argparse.Namespace) -> None:
     config.SAVE_DATA_OPTION = args.save_data_option
     config.SAVE_DATA_PATH = args.save_data_path
     config.CRAWLER_MAX_NOTES_COUNT = args.crawler_max_notes_count
+    crawler_type_var.set(args.type)
+    source_keyword_var.set(args.keywords)
     config.ENABLE_GET_WORDCLOUD = False
     config.ENABLE_IP_PROXY = False
 
