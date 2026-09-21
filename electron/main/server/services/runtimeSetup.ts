@@ -128,6 +128,9 @@ async function installRuntime(): Promise<void> {
   const dataRoot = await userRuntimeDataDir();
   phase = '准备安装资源'; message = '正在准备本机运行环境…';
   copyBootstrap(path.join(bootstrap, 'media-crawler'), path.join(installRoot, 'media-crawler', 'proxy'));
+  // bootstrap/media-crawler 内含 upstream；代理目录只需要 server/browser/search 等轻量文件，
+  // 先移除嵌套副本，再把 upstream 放到唯一的正式位置，避免运行环境重复一份源码。
+  fs.rmSync(path.join(installRoot, 'media-crawler', 'proxy', 'upstream'), { recursive: true, force: true });
   copyBootstrap(path.join(bootstrap, 'media-crawler', 'upstream'), path.join(installRoot, 'media-crawler', 'upstream'));
   copyBootstrap(path.join(bootstrap, 'wechat-mp-tools'), path.join(installRoot, 'wechat-mp-tools'));
   const uv = await installUv(path.join(dataRoot, 'bin'));
