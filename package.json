@@ -1,6 +1,6 @@
 {
   "name": "newmedia-workbench",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "AI新媒体工作台（Electron 桌面端）",
   "type": "module",
   "main": "out/main/index.cjs",
@@ -15,6 +15,7 @@
     "dev:server": "tsx watch electron/main/server/dev.ts",
     "dev:web": "vite --config vite.config.ts --host 127.0.0.1",
     "verify:m1": "tsx electron/main/server/verify.ts",
+    "verify:ai-provider-customization": "node --import tsx scripts/verify-ai-provider-customization.ts",
     "stage:runtime": "node scripts/stage-runtime.mjs",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder --publish=never",

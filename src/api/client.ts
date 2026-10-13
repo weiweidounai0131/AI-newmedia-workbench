@@ -1,7 +1,6 @@
 // 前端 → 本地后端（loopback）调用封装。Key 永不经过此处（仅 configured 布尔）。
 // 单一事实源：BACKEND-PATH §6.6 / §3.3 / §2.5 / §4.2
-import type { CapId } from '../../electron/main/server/services/caps';
-import type { CapSummary, LibFile } from '../store/appStore';
+import type { CapId, LibFile, ProviderProtocol, SettingsSummary } from '../store/appStore';
 
 declare global {
   interface Window {
@@ -40,14 +39,24 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-interface SettingsResp {
-  rootDir: string | null;
-  xhsDownloadDir: string | null;
-  suppliers: Record<string, string>;
-  caps: CapSummary[];
-}
 interface BasicResp {
   error?: string;
+}
+export interface ProviderDraftRequest {
+  id?: string;
+  mode?: 'create' | 'edit';
+  cap?: CapId;
+  sourceProviderId?: string;
+  sourceModel?: string;
+  label: string;
+  baseURL: string;
+  protocol: ProviderProtocol;
+  apiKey?: string;
+  models: { id: string; label?: string; capabilities: CapId[] }[];
+}
+export interface ProviderModelListResponse {
+  models: string[];
+  fetchedAt: string;
 }
 interface QrResp {
   connected: boolean;
@@ -112,10 +121,16 @@ export interface PlatformCooldowns {
 }
 
 export const api = {
-  getSettings: () => req<SettingsResp>('/api/settings'),
+  getSettings: () => req<SettingsSummary>('/api/settings'),
   setKey: (cap: CapId, key: string) => req<BasicResp>('/api/settings/key', { method: 'POST', body: JSON.stringify({ cap, key }) }),
   setProvider: (cap: CapId, provider: string) => req<BasicResp>('/api/settings/provider', { method: 'POST', body: JSON.stringify({ cap, provider }) }),
   setSupplier: (cap: CapId, model: string) => req<BasicResp>('/api/settings/supplier', { method: 'POST', body: JSON.stringify({ cap, model }) }),
+  setCapability: (cap: CapId, providerId: string, model: string) => req<BasicResp>('/api/settings/capability', { method: 'POST', body: JSON.stringify({ cap, providerId, model }) }),
+  saveProvider: (provider: ProviderDraftRequest) => req<{ ok: boolean; providerId: string; settings: SettingsSummary }>('/api/settings/providers/save', { method: 'POST', body: JSON.stringify(provider) }),
+  setProviderKey: (providerId: string, key: string) => req<{ ok: boolean; settings: SettingsSummary }>('/api/settings/providers/key', { method: 'POST', body: JSON.stringify({ providerId, key }) }),
+  deleteProvider: (providerId: string) => req<{ ok: boolean; settings: SettingsSummary }>(`/api/settings/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' }),
+  deleteCapabilityConfig: (cap: CapId, providerId: string, model: string) => req<{ ok: boolean; settings: SettingsSummary }>(`/api/settings/providers/${encodeURIComponent(providerId)}/config?cap=${encodeURIComponent(cap)}&model=${encodeURIComponent(model)}`, { method: 'DELETE' }),
+  fetchProviderModels: (provider: Pick<ProviderDraftRequest, 'id' | 'baseURL' | 'protocol' | 'apiKey'>, signal?: AbortSignal) => req<ProviderModelListResponse>('/api/settings/providers/models', { method: 'POST', body: JSON.stringify(provider), signal }),
   setRootDir: (rootDir: string) => req<BasicResp>('/api/settings/rootdir', { method: 'POST', body: JSON.stringify({ rootDir }) }),
   setXhsDownloadDir: (xhsDownloadDir: string) => req<{ ok: boolean; xhsDownloadDir: string | null; synced?: boolean }>('/api/settings/xhs-download-dir', { method: 'POST', body: JSON.stringify({ xhsDownloadDir }) }),
   verifyCap: (cap: CapId) => req<VerifyResp>('/api/settings/verify', { method: 'POST', body: JSON.stringify({ cap }) }),

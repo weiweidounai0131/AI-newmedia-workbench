@@ -3,6 +3,27 @@
 // text / image 槽位支持多个 OpenAI 兼容供应商；默认仍保持原来的 DeepSeek / AIHubMix。
 
 export type CapId = 'text' | 'visionImg' | 'visionVideo' | 'image';
+export type ProviderProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic-messages';
+
+export interface ProviderModel {
+  id: string;
+  label?: string;
+  capabilities: CapId[];
+}
+
+export interface ProviderRecord {
+  id: string;
+  label: string;
+  portal?: string;
+  keyId: string;
+  baseURL: string;
+  protocol: ProviderProtocol;
+  models: ProviderModel[];
+  builtin: boolean;
+  revision: number;
+  /** New settings created from a type-specific flow are isolated to that capability. */
+  scopeCap?: CapId;
+}
 
 export interface ProviderDef {
   /** 设置页与审计中使用的稳定 ID */
@@ -13,6 +34,7 @@ export interface ProviderDef {
   keyId: string;
   /** OpenAI 兼容 base_url */
   baseURL: string;
+  protocol: ProviderProtocol;
   /** 该供应商的默认模型 */
   defaultModel: string;
   /** 该供应商可切换的备选模型 */
@@ -50,6 +72,7 @@ const DEEPSEEK_PROVIDER: ProviderDef = {
   label: 'DeepSeek',
   keyId: 'deepseek',
   baseURL: 'https://api.deepseek.com',
+  protocol: 'openai-chat-completions',
   defaultModel: 'deepseek-chat',
   alternatives: ['deepseek-reasoner'],
   portal: 'https://platform.deepseek.com/',
@@ -60,6 +83,7 @@ const ZHIPU_TEXT_PROVIDER: ProviderDef = {
   label: '智谱',
   keyId: 'zhipu',
   baseURL: 'https://open.bigmodel.cn/api/paas/v4/',
+  protocol: 'openai-chat-completions',
   defaultModel: 'glm-5.3-flash',
   alternatives: ['glm-4.5-air'],
   portal: 'https://open.bigmodel.cn/',
@@ -74,6 +98,7 @@ const ZHIPU_VISION_PROVIDER: ProviderDef = {
   label: '智谱',
   keyId: 'zhipu',
   baseURL: 'https://open.bigmodel.cn/api/paas/v4/',
+  protocol: 'openai-chat-completions',
   defaultModel: 'glm-4v-flash',
   alternatives: ['glm-4v-plus'],
   portal: 'https://open.bigmodel.cn/',
@@ -84,6 +109,7 @@ const DEEPSEEK_VISION_PROVIDER: ProviderDef = {
   label: 'DeepSeek',
   keyId: 'deepseek',
   baseURL: 'https://api.deepseek.com',
+  protocol: 'openai-chat-completions',
   defaultModel: 'deepseek-flash',
   alternatives: [],
   portal: 'https://platform.deepseek.com/',
@@ -97,6 +123,7 @@ const QWEN_VISION_PROVIDER: ProviderDef = {
   label: '通义千问',
   keyId: 'qwen',
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  protocol: 'openai-chat-completions',
   defaultModel: 'qwen-vl-max',
   alternatives: ['qwen-vl-plus'],
   portal: 'https://bailian.console.aliyun.com/',
@@ -107,6 +134,7 @@ const AIHUBMIX_IMAGE_PROVIDER: ProviderDef = {
   label: 'AIHubMix',
   keyId: 'openai',
   baseURL: 'https://aihubmix.com/v1',
+  protocol: 'openai-chat-completions',
   defaultModel: 'gpt-image-2',
   alternatives: ['gpt-image-1'],
   portal: 'https://aihubmix.com/',
@@ -118,6 +146,7 @@ const SUDOCODE_IMAGE_PROVIDER: ProviderDef = {
   keyId: 'sudocode',
   // 文档提供的备用直连节点；当前主节点在本机代理环境下鉴权请求会超时。
   baseURL: 'https://api.sudorelay.com/v1',
+  protocol: 'openai-chat-completions',
   defaultModel: 'gpt-image-2',
   alternatives: [],
   portal: 'https://sudocode.chat/docs',
@@ -190,6 +219,7 @@ export function getProviderDef(cap: CapId, providerId?: string): ProviderDef {
     label: def.keyId,
     keyId: def.keyId,
     baseURL: def.baseURL,
+    protocol: 'openai-chat-completions',
     defaultModel: def.defaultModel,
     alternatives: def.alternatives,
     portal: '',
@@ -198,6 +228,47 @@ export function getProviderDef(cap: CapId, providerId?: string): ProviderDef {
 
 export function getProviderOptions(cap: CapId): ProviderDef[] {
   return CAP_SLOTS[cap].providers ?? [];
+}
+
+/** Built-in defaults are grouped by stable provider ID while retaining their old model/key mappings. */
+export function getBuiltinProviders(): ProviderRecord[] {
+  const grouped = new Map<string, ProviderRecord>();
+  for (const cap of CAP_IDS) {
+    const def = CAP_SLOTS[cap];
+    const options = def.providers?.length ? def.providers : [getProviderDef(cap)];
+    for (const option of options) {
+      let provider = grouped.get(option.id);
+      if (!provider) {
+        provider = {
+          id: option.id,
+          label: option.label,
+          portal: option.portal,
+          keyId: option.keyId,
+          baseURL: option.baseURL,
+          protocol: option.protocol,
+          models: [],
+          builtin: true,
+          revision: 1,
+        };
+        grouped.set(option.id, provider);
+      }
+      for (const id of [option.defaultModel, ...option.alternatives]) {
+        const existing = provider.models.find((model) => model.id === id);
+        if (existing) {
+          if (!existing.capabilities.includes(cap)) existing.capabilities.push(cap);
+        } else {
+          provider.models.push({ id, label: option.modelLabels?.[id], capabilities: [cap] });
+        }
+      }
+    }
+  }
+  return [...grouped.values()];
+}
+
+export function providerSupportsCapability(provider: Pick<ProviderRecord, 'protocol'>, cap: CapId): boolean {
+  if (cap === 'image') return provider.protocol === 'openai-chat-completions';
+  if (cap === 'visionVideo') return provider.protocol === 'openai-chat-completions';
+  return true;
 }
 
 /** sk- 前缀校验：仅对需要 sk- 的供应商做格式校验（BACKEND-PATH §6.3） */

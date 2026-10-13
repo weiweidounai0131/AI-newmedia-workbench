@@ -46,7 +46,7 @@ jobs:
           printf '{\n  "provider": "generic",\n  "url": "%s",\n  "fallbackUrl": "%s",\n  "timeoutMs": 6000\n}\n' "$UPDATE_SERVER_URL" "$oss_url" > resources/update-source.json
 
       - name: Build macOS package
-        run: npm run dist:mac
+        run: npm run dist:mac -- --arm64
 
       - name: Publish macOS updater files
         run: |

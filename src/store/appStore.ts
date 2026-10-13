@@ -6,6 +6,41 @@ import type { HotItem, SearchItem } from '../data/sample';
 import { api } from '../api/client';
 
 export type CapId = 'text' | 'visionImg' | 'visionVideo' | 'image';
+export type ProviderProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic-messages';
+
+export interface ProviderModelSummary {
+  id: string;
+  label?: string;
+  capabilities: CapId[];
+}
+
+export interface ProviderSummary {
+  id: string;
+  label: string;
+  portal?: string;
+  baseURL: string;
+  protocol: ProviderProtocol;
+  models: ProviderModelSummary[];
+  builtin: boolean;
+  keyConfigured: boolean;
+  configured: boolean;
+  revision: number;
+  scopeCap?: CapId | null;
+}
+
+export interface CapabilityModelConfigSummary {
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  modelLabel: string;
+  baseURL: string;
+  protocol: ProviderProtocol;
+  builtin: boolean;
+  scopeCap?: CapId | null;
+  configured: boolean;
+  active: boolean;
+  verified: boolean;
+}
 
 export interface CapSummary {
   cap: CapId;
@@ -21,12 +56,15 @@ export interface CapSummary {
   providerOptions?: {
     id: string;
     label: string;
-    portal: string;
+    portal?: string;
+    protocol: ProviderProtocol;
+    configured: boolean;
     models: string[];
     modelLabels?: Record<string, string>;
   }[];
   configured: boolean;
   verified?: boolean;
+  configurations: CapabilityModelConfigSummary[];
 }
 
 export interface SettingsSummary {
@@ -34,6 +72,7 @@ export interface SettingsSummary {
   xhsDownloadDir: string | null;
   suppliers: Record<string, string>;
   caps: CapSummary[];
+  providers: ProviderSummary[];
 }
 
 export type LibKind = 'x' | 'w' | 'i';

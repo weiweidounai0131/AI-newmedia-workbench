@@ -1,20 +1,39 @@
 import { useEffect, useState, useRef } from 'react';
-import { Button, Input, Select, SelectItem, Chip, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
-import { CAP_SLOTS, getProviderDef, getProviderOptions, type CapId } from '../../electron/main/server/services/caps';
-import { useApp, setSettings, setView } from '../store/appStore';
-import { api, type UpdateStatus } from '../api/client';
+import { Button, Input, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
+import { CAP_SLOTS, type CapId } from '../../electron/main/server/services/caps';
+import { useApp, setSettings, setView, type CapabilityModelConfigSummary } from '../store/appStore';
+import { api, type ProviderDraftRequest, type UpdateStatus } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
 
+const CAPABILITY_TITLES: Record<CapId, string> = {
+  text: '文字改写',
+  visionImg: '图片识别',
+  visionVideo: '视频识别',
+  image: '图片生成',
+};
+
 export default function Settings() {
   const settings = useApp((s) => s.settings);
   const toast = useToastMsg();
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
-  const [capState, setCapState] = useState<Record<string, 'saved' | 'verified'>>({});
-  const [editingCap, setEditingCap] = useState<Record<string, boolean>>({});
-  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configModalCap, setConfigModalCap] = useState<CapId | null>(null);
+  const [configEditorOpen, setConfigEditorOpen] = useState(false);
+  const [providerDraft, setProviderDraft] = useState<ProviderDraftRequest>({ label: '', baseURL: '', protocol: 'openai-chat-completions', apiKey: '', models: [] });
+  const [availableModelIds, setAvailableModelIds] = useState<string[]>([]);
+  const [manualModelId, setManualModelId] = useState('');
+  const [modelFetchState, setModelFetchState] = useState<{ busy: boolean; message: string; error: boolean }>({ busy: false, message: '', error: false });
+  const [providerSaving, setProviderSaving] = useState(false);
+  const providerFetchEpoch = useRef(0);
+  const providerFetchController = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    providerFetchEpoch.current += 1;
+    providerFetchController.current?.abort();
+    providerFetchController.current = null;
+  }, []);
   // M3：导出根目录可编辑并真实写入（POST /api/settings/rootdir）
   const [rootDirInput, setRootDirInput] = useState<string>('');
   const [savingRoot, setSavingRoot] = useState(false);
@@ -168,64 +187,185 @@ export default function Settings() {
     }
   }
 
-  const capMeta = (cap: CapId) => {
-    const def = CAP_SLOTS[cap];
-    const sum = settings?.caps.find((c) => c.cap === cap);
-    const provider = getProviderDef(cap, sum?.provider);
-    const providerOptions = sum?.providerOptions ?? getProviderOptions(cap).map((item) => ({
-      id: item.id,
-      label: item.label,
-      portal: item.portal,
-      models: [item.defaultModel, ...item.alternatives],
-      modelLabels: item.modelLabels ?? {},
-    }));
-    const models = sum?.models ?? [provider.defaultModel, ...provider.alternatives];
-    return {
-      def,
-      provider,
-      providerOptions,
-      configured: sum?.configured ?? false,
-      verified: sum?.verified ?? false,
-      model: sum?.model && models.includes(sum.model) ? sum.model : provider.defaultModel,
-      models,
-      modelLabels: sum?.modelLabels ?? provider.modelLabels ?? {},
-    };
-  };
+  function invalidateModelDiscovery() {
+    providerFetchEpoch.current += 1;
+    providerFetchController.current?.abort();
+    providerFetchController.current = null;
+    setModelFetchState({ busy: false, message: '', error: false });
+  }
 
-  async function changeProvider(cap: CapId, providerId: string) {
+  function updateProviderRequestConfig(patch: Partial<Pick<ProviderDraftRequest, 'baseURL' | 'protocol' | 'apiKey'>>) {
+    invalidateModelDiscovery();
+    setProviderDraft((draft) => ({ ...draft, ...patch }));
+  }
+
+  function openCapabilitySettings(cap: CapId) {
+    invalidateModelDiscovery();
+    setConfigModalCap(cap);
+    setConfigEditorOpen(false);
+    setConfigModalOpen(true);
+  }
+
+  function closeCapabilitySettings() {
+    invalidateModelDiscovery();
+    setConfigModalOpen(false);
+    setConfigEditorOpen(false);
+    setConfigModalCap(null);
+  }
+
+  function startNewCapabilityConfig(cap: CapId) {
+    invalidateModelDiscovery();
+    setProviderDraft({ mode: 'create', cap, label: '', baseURL: '', protocol: 'openai-chat-completions', apiKey: '', models: [] });
+    setAvailableModelIds([]);
+    setManualModelId('');
+    setConfigEditorOpen(true);
+  }
+
+  function startConfigFromTemplate(cap: CapId, providerId: string, modelId: string) {
+    const provider = settings?.providers.find((item) => item.id === providerId);
+    if (!provider) return;
+    invalidateModelDiscovery();
+    setProviderDraft({
+      mode: 'create',
+      cap,
+      sourceProviderId: provider.id,
+      label: provider.label,
+      baseURL: provider.baseURL,
+      protocol: provider.protocol,
+      apiKey: '',
+      models: [{ id: modelId, capabilities: [cap] }],
+    });
+    setAvailableModelIds(provider.models.filter((model) => model.capabilities.includes(cap)).map((model) => model.id));
+    setManualModelId('');
+    setConfigEditorOpen(true);
+  }
+
+  function startEditCapabilityConfig(cap: CapId, config: CapabilityModelConfigSummary) {
+    const provider = settings?.providers.find((item) => item.id === config.providerId);
+    if (!provider) return;
+    invalidateModelDiscovery();
+    setProviderDraft({
+      mode: 'edit',
+      ...(provider.scopeCap === cap && !provider.builtin ? { id: provider.id } : {}),
+      cap,
+      sourceProviderId: provider.id,
+      sourceModel: config.model,
+      label: provider.label,
+      baseURL: provider.baseURL,
+      protocol: provider.protocol,
+      apiKey: '',
+      models: [{ id: config.model, capabilities: [cap] }],
+    });
+    setAvailableModelIds([config.model]);
+    setManualModelId('');
+    setConfigEditorOpen(true);
+  }
+
+  function selectedDraftModel(): string {
+    return providerDraft.models[0]?.id ?? '';
+  }
+
+  function selectDraftModel(modelId: string) {
+    const cap = providerDraft.cap;
+    if (!cap) return;
+    setProviderDraft((draft) => ({ ...draft, models: modelId ? [{ id: modelId, capabilities: [cap] }] : [] }));
+  }
+
+  function addManualModel() {
+    const id = manualModelId.trim();
+    if (!id) return;
+    setAvailableModelIds((models) => models.includes(id) ? models : [...models, id]);
+    selectDraftModel(id);
+    setManualModelId('');
+  }
+
+  async function discoverModels() {
+    providerFetchController.current?.abort();
+    const requestEpoch = ++providerFetchEpoch.current;
+    const controller = new AbortController();
+    providerFetchController.current = controller;
+    const requestedDraftId = providerDraft.id;
+    const requestedSourceProviderId = providerDraft.sourceProviderId;
+    const requestedConfig = {
+      cap: providerDraft.cap,
+      id: requestedDraftId || requestedSourceProviderId,
+      baseURL: providerDraft.baseURL,
+      protocol: providerDraft.protocol,
+      apiKey: providerDraft.apiKey,
+    };
+    const isCurrent = () => providerFetchEpoch.current === requestEpoch
+      && providerFetchController.current === controller
+      && configModalOpen
+      && configEditorOpen
+      && providerDraft.cap === requestedConfig.cap
+      && providerDraft.id === requestedDraftId
+      && providerDraft.sourceProviderId === requestedSourceProviderId
+      && (providerDraft.id || providerDraft.sourceProviderId) === requestedConfig.id
+      && providerDraft.baseURL === requestedConfig.baseURL
+      && providerDraft.protocol === requestedConfig.protocol
+      && providerDraft.apiKey === requestedConfig.apiKey;
+    setModelFetchState({ busy: true, message: '', error: false });
     try {
-      await api.setProvider(cap, providerId);
-      setCapState((s) => {
-        const next = { ...s };
-        delete next[cap];
-        return next;
-      });
-      setEditingCap((s) => ({ ...s, [cap]: false }));
-      setKeys((s) => ({ ...s, [cap]: '' }));
-      await api.getSettings().then(setSettings);
-      const provider = getProviderOptions(cap).find((item) => item.id === providerId);
-      toast(`${CAP_SLOTS[cap].label} 已切换至${provider?.label || providerId}`, 'success');
-    } catch (e: any) {
-      toast(e?.message || '切换供应商失败', 'danger');
+      const result = await api.fetchProviderModels(requestedConfig, controller.signal);
+      if (!isCurrent()) return;
+      setAvailableModelIds((models) => [...new Set([...models, ...result.models])]);
+      if (!selectedDraftModel() && result.models[0]) selectDraftModel(result.models[0]);
+      setModelFetchState({ busy: false, message: `找到 ${result.models.length} 个模型，请选择本配置要使用的模型。`, error: false });
+    } catch (error: any) {
+      if (!isCurrent()) return;
+      setModelFetchState({ busy: false, message: error?.message || '获取模型失败；可手工添加模型 ID。', error: true });
+    } finally {
+      if (providerFetchEpoch.current === requestEpoch && providerFetchController.current === controller) {
+        providerFetchController.current = null;
+        setModelFetchState((current) => current.busy ? { ...current, busy: false } : current);
+      }
     }
   }
 
-  async function saveKey(cap: CapId) {
-    const key = (keys[cap] ?? '').trim();
-    if (!key) return toast('请先填写 Key', 'warning');
-    setSaving((s) => ({ ...s, [cap]: true }));
+  function protocolAllowed(protocol: ProviderDraftRequest['protocol'], cap: CapId) {
+    return !((cap === 'image' || cap === 'visionVideo') && protocol !== 'openai-chat-completions');
+  }
+
+  async function saveProvider() {
+    const cap = providerDraft.cap;
+    const model = selectedDraftModel();
+    if (!cap || !model) return toast('请先选择本配置使用的模型', 'warning');
+    invalidateModelDiscovery();
+    setProviderSaving(true);
     try {
-      const r = await api.setKey(cap, key);
-      if (r.error) throw new Error(r.error);
-      toast(`${CAP_SLOTS[cap].label} Key 已本地加密保存`, 'success');
-      setCapState((s) => ({ ...s, [cap]: 'saved' }));
-      setEditingCap((s) => ({ ...s, [cap]: false }));
-      setKeys((s) => ({ ...s, [cap]: '' }));
-      await api.getSettings().then(setSettings);
-    } catch (e: any) {
-      toast(e?.message || '保存失败', 'danger');
+      const result = await api.saveProvider({ ...providerDraft, models: [{ id: model, capabilities: [cap] }] });
+      setSettings(result.settings);
+      invalidateModelDiscovery();
+      setConfigEditorOpen(false);
+      setProviderDraft({ label: '', baseURL: '', protocol: 'openai-chat-completions', apiKey: '', models: [] });
+      toast('模型配置已保存；是否启用由列表中的当前配置选择', 'success');
+    } catch (error: any) {
+      toast(error?.message || '提供商配置未能保存', 'danger');
     } finally {
-      setSaving((s) => ({ ...s, [cap]: false }));
+      setProviderSaving(false);
+    }
+  }
+
+  async function deleteCapabilityConfig(cap: CapId, config: CapabilityModelConfigSummary) {
+    const message = config.builtin
+      ? `从「${CAPABILITY_TITLES[cap]}」配置列表移除「${config.providerLabel} · ${config.model}」？其他类型不会改变。`
+      : `从「${CAPABILITY_TITLES[cap]}」配置列表移除「${config.providerLabel} · ${config.model}」？若它没有被其他类型使用，专属加密 Key 也会一并清除。`;
+    if (!window.confirm(message)) return;
+    try {
+      const result = await api.deleteCapabilityConfig(cap, config.providerId, config.model);
+      setSettings(result.settings);
+      toast('已从当前类型移除该配置', 'success');
+    } catch (error: any) {
+      toast(error?.message || '删除失败', 'danger');
+    }
+  }
+
+  async function assignCapability(cap: CapId, providerId: string, modelId: string) {
+    try {
+      await api.setCapability(cap, providerId, modelId);
+      await api.getSettings().then(setSettings);
+    } catch (error: any) {
+      toast(error?.message || '能力分配失败', 'danger');
     }
   }
 
@@ -234,12 +374,11 @@ export default function Settings() {
     try {
       const r = await api.verifyCap(cap);
       if (r.ok) {
-        setCapState((s) => ({ ...s, [cap]: 'verified' }));
         toast(`${CAP_SLOTS[cap].label} 验证通过（${r.model}）`, 'success');
       } else {
-        setCapState((s) => ({ ...s, [cap]: 'saved' }));
         toast(`${CAP_SLOTS[cap].label} 验证失败：${r.error}`, 'danger');
       }
+      await api.getSettings().then(setSettings);
     } catch (e: any) {
       toast(e?.message || '验证失败', 'danger');
     } finally {
@@ -281,6 +420,22 @@ export default function Settings() {
     }
   }
 
+  const currentConfigCap = configModalCap
+    ? settings?.caps.find((item) => item.cap === configModalCap)
+    : undefined;
+  const currentConfigOptions = currentConfigCap?.configurations ?? [];
+  const editingConfig = !!providerDraft.sourceModel;
+  const sourceProvider = providerDraft.sourceProviderId
+    ? settings?.providers.find((item) => item.id === providerDraft.sourceProviderId)
+    : undefined;
+  const selectedModel = selectedDraftModel();
+
+  function configStatus(config: CapabilityModelConfigSummary): string {
+    if (config.active && config.verified) return '已验证';
+    if (!config.configured) return '未配置';
+    return config.active ? '已保存，未验证' : '已保存';
+  }
+
   return (
     <div className="settings-wrap">
       <div className="warn-box">
@@ -290,119 +445,168 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* AI 模型（按能力分层） */}
       <div className="panel">
         <div className="panel-head">
-          <h3>
-            <Icon name="layers" className="ic" size={18} /> AI 模型（按能力分层）
-          </h3>
-          <div className="spacer" />
-          <span className="set-status ok">
-            <Icon name="check" className="ic" size={14} /> 四能力槽位
-          </span>
+          <h3><Icon name="layers" className="ic" size={18} /> AI模型设置</h3>
         </div>
         <div className="panel-body">
           <div className="cap-note">
             <Icon name="spark" className="ic" size={16} />
-            <div>
-              不固化单一厂商：每种能力对应一个「供应商」槽位，可一键切换。API Key 本地加密，所有调用经<b>后端代理（AI 代理层）</b>，前端不持有 Key。
-            </div>
+            <div>为每种工作选择要使用的模型。未配置密钥或未验证的配置也可以保存，状态会单独显示。</div>
           </div>
-
-          {Object.values(CAP_SLOTS).map((def) => {
-            const { configured, verified, model, provider, providerOptions, models, modelLabels } = capMeta(def.id);
-            const status = capState[def.id] ?? (verified ? 'verified' : configured ? 'saved' : null);
-            const keyLocked = configured && !editingCap[def.id];
-            return (
-              <div className="set-row cap-row" key={def.id}>
-                <div className="s-main">
-                  <div className="s-t">
-                    {def.label}
-                    {def.locked && <span className="lock-tag">固定</span>}
-                  </div>
-                  <div className="s-d">{provider.label} · {model}{def.kind === 'image' ? ' · OpenAI 兼容接口' : ''}</div>
-                </div>
-                <a className="cap-key-link" href={provider.portal || '#'} target="_blank" rel="noreferrer">点击获取 API Key</a>
-                <div className={`cap-ctl ${providerOptions.length ? 'has-provider' : ''}`}>
-                  {providerOptions.length > 0 && (
-                    <Select
-                      className="cap-select cap-provider-select"
-                      aria-label={`${def.label}供应商`}
-                      selectedKeys={new Set([provider.id])}
-                      disallowEmptySelection
-                      isDisabled={def.locked || providerOptions.length < 2}
-                      size="sm"
-                      onSelectionChange={(k) => {
-                        const v = [...k][0] as string;
-                        if (v && v !== provider.id) void changeProvider(def.id, v);
-                      }}
-                    >
-                      {providerOptions.map((item) => <SelectItem key={item.id}>{item.label}</SelectItem>)}
-                    </Select>
-                  )}
-                  <Select
-                    className="cap-select"
-                    selectedKeys={new Set([model])}
-                    disallowEmptySelection
-                    isDisabled={def.locked}
-                    size="sm"
-                    onSelectionChange={(k) => {
-                      const v = [...k][0] as string;
-                      api.setSupplier(def.id, v).then(() => api.getSettings().then(setSettings));
-                    }}
-                  >
-                    {models.map((m) => (
-                      <SelectItem key={m}>{modelLabels[m] ?? m}</SelectItem>
-                    ))}
-                  </Select>
-                  <Input
-                    className="cap-input"
-                    type={keyLocked ? 'text' : 'password'}
-                    isReadOnly={keyLocked}
-                    placeholder={`sk-...（${provider.label}）`}
-                    value={keyLocked ? '••••••••••••••••' : keys[def.id] ?? ''}
-                    onValueChange={(v) => setKeys((s) => ({ ...s, [def.id]: v }))}
-                    size="sm"
-                  />
-                  {keyLocked ? (
-                    <Button
-                      className="cap-btn topic-outline-button"
-                      variant="bordered"
-                      size="sm"
-                      onPress={() => setEditingCap((s) => ({ ...s, [def.id]: true }))}
-                    >
-                      <Icon name="pen" className="ic" size={14} /> 修改
-                    </Button>
-                  ) : (
-                    <Button
-                      className="cap-btn"
-                      color="primary"
-                      size="sm"
-                      isLoading={saving[def.id]}
-                      onPress={() => saveKey(def.id)}
-                    >
-                      <Icon name="check" className="ic" size={14} /> 保存
-                    </Button>
-                  )}
-                  <Button
-                    className="cap-btn topic-outline-button"
-                    size="sm"
-                    variant="bordered"
-                    isLoading={verifying[def.id]}
-                    onPress={() => verify(def.id)}
-                  >
-                    验证
-                  </Button>
-                  <span className={`cap-status set-status ${status ? 'ok' : 'no'}`}>
-                    <Icon name={status ? 'check' : 'alert'} className="ic" size={14} />
-                    {status === 'verified' ? '已验证' : status === 'saved' ? '已保存' : '未配置'}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+          <div className="ai-model-settings-grid">
+            {(Object.keys(CAPABILITY_TITLES) as CapId[]).map((cap) => {
+              const summary = settings?.caps.find((item) => item.cap === cap);
+              const current = summary?.configurations.find((item) => item.active);
+              const status = summary?.verified ? '已验证' : summary?.configured ? '已保存，未验证' : '未配置';
+              return (
+                <article className="ai-model-card" key={cap} data-testid={`ai-model-card-${cap}`}>
+                  <div className="ai-model-card-title">{CAPABILITY_TITLES[cap]}</div>
+                  <div className="ai-model-card-current">{current ? `${current.providerLabel} · ${current.model}` : `${summary?.providerLabel ?? '未配置'} · ${summary?.model ?? '未选择模型'}`}</div>
+                  <span className={`ai-model-status ${status === '未配置' ? 'empty' : status === '已验证' ? 'verified' : 'saved'}`}>{status}</span>
+                  <Button className="ai-model-edit-button" size="sm" variant="bordered" onPress={() => openCapabilitySettings(cap)}>修改模型</Button>
+                </article>
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      <Modal isOpen={configModalOpen} onOpenChange={(open) => { if (!open) closeCapabilitySettings(); }} size="3xl" scrollBehavior="inside">
+        <ModalContent className="capability-config-modal">
+          {(onClose) => (
+            <>
+              <ModalHeader className="capability-config-modal-head">
+                <div>{configModalCap ? CAPABILITY_TITLES[configModalCap] : '模型设置'}配置</div>
+                {configEditorOpen && <Button size="sm" variant="light" onPress={() => { invalidateModelDiscovery(); setConfigEditorOpen(false); }}>返回配置列表</Button>}
+              </ModalHeader>
+              <ModalBody className="capability-config-modal-body">
+                {configModalCap && !configEditorOpen && (
+                  <div className="capability-config-list" data-testid={`capability-config-list-${configModalCap}`}>
+                    <div className="capability-config-list-head">
+                      <div><strong>本类型可用配置</strong><p>选择后立即保存并应用到后续请求。密钥未配置时仍可先保存选择。</p></div>
+                      <Button color="primary" size="sm" onPress={() => startNewCapabilityConfig(configModalCap)}>添加配置</Button>
+                    </div>
+                    {currentConfigOptions.map((config) => (
+                      <article className={`capability-config-row ${config.active ? 'active' : ''}`} key={`${config.providerId}:${config.model}`} data-testid={`cap-config-${config.providerId}-${encodeURIComponent(config.model)}`}>
+                        <label className="capability-config-radio-row">
+                          <input
+                            type="radio"
+                            name={`active-config-${configModalCap}`}
+                            aria-label={`启用 ${config.providerLabel} ${config.model}`}
+                            checked={config.active}
+                            onChange={() => void assignCapability(configModalCap, config.providerId, config.model)}
+                          />
+                          <span className="capability-config-name">
+                            <strong>{config.providerLabel}</strong>
+                            <span>{config.modelLabel}</span>
+                          </span>
+                        </label>
+                        <div className="capability-config-status">
+                          <span className={`ai-model-status ${configStatus(config) === '未配置' ? 'empty' : config.verified ? 'verified' : 'saved'}`}>{configStatus(config)}</span>
+                          {config.active && <Button size="sm" variant="bordered" isLoading={verifying[configModalCap]} isDisabled={!config.configured} onPress={() => void verify(configModalCap)}>验证</Button>}
+                        </div>
+                        <div className="capability-config-actions">
+                          <Button size="sm" variant="light" onPress={() => startEditCapabilityConfig(configModalCap, config)}>编辑</Button>
+                          <Button size="sm" variant="light" color="danger" onPress={() => void deleteCapabilityConfig(configModalCap, config)}>移除</Button>
+                        </div>
+                      </article>
+                    ))}
+                    {currentConfigOptions.length === 0 && <div className="provider-empty-models">暂时没有可用配置，请添加一个。</div>}
+                  </div>
+                )}
+
+                {configModalCap && configEditorOpen && (
+                  <div className="capability-config-editor" data-testid="capability-config-editor">
+                    <div className="capability-config-editor-title">{editingConfig ? '编辑本类型配置' : '新增本类型配置'}</div>
+                    <p className="capability-config-editor-note">保存后配置会出现在本类型列表中；是否启用由你单独选择。</p>
+                    <div className="capability-config-form-grid">
+                      <label className="provider-field">
+                        <span>配置名称</span>
+                        <Input aria-label="配置名称" value={providerDraft.label} onValueChange={(value) => setProviderDraft((draft) => ({ ...draft, label: value }))} placeholder="例如：公司网关" />
+                      </label>
+                      <label className="provider-field">
+                        <span>{editingConfig ? '配置来源' : '供应商模板'}</span>
+                        {editingConfig ? (
+                          <div className="provider-template-readonly">{sourceProvider?.label ?? providerDraft.label} · {selectedModel}</div>
+                        ) : (
+                          <select
+                            className="cap-sel provider-template-select"
+                            aria-label="供应商模板"
+                            value={providerDraft.sourceProviderId ? String(currentConfigOptions.findIndex((item) => item.providerId === providerDraft.sourceProviderId && item.model === selectedModel) + 1) : 'custom'}
+                            onChange={(event) => {
+                              if (event.target.value === 'custom') startNewCapabilityConfig(configModalCap);
+                              else {
+                                const item = currentConfigOptions[Number(event.target.value) - 1];
+                                if (item) startConfigFromTemplate(configModalCap, item.providerId, item.model);
+                              }
+                            }}
+                          >
+                            <option value="custom">自定义第三方</option>
+                            {currentConfigOptions.map((item, index) => <option value={String(index + 1)} key={`${item.providerId}:${item.model}`}>{item.providerLabel} · {item.model}</option>)}
+                          </select>
+                        )}
+                      </label>
+                      <label className="provider-field full-width">
+                        <span>API 根地址</span>
+                        <Input aria-label="API 根地址" value={providerDraft.baseURL} onValueChange={(value) => updateProviderRequestConfig({ baseURL: value })} placeholder="https://api.example.com/v1" />
+                        <small>填写服务提供方给出的 API 根地址。</small>
+                      </label>
+                      <label className="provider-field">
+                        <span>接口协议</span>
+                        <select
+                          aria-label="接口协议"
+                          className="cap-sel"
+                          value={providerDraft.protocol}
+                          onChange={(event) => {
+                            const protocol = event.target.value as ProviderDraftRequest['protocol'];
+                            if (!protocolAllowed(protocol, configModalCap)) return;
+                            updateProviderRequestConfig({ protocol });
+                          }}
+                        >
+                          <option value="openai-chat-completions">OpenAI Chat Completions</option>
+                          {configModalCap !== 'image' && configModalCap !== 'visionVideo' && <>
+                            <option value="openai-responses">OpenAI Responses</option>
+                            <option value="anthropic-messages">Anthropic Messages</option>
+                          </>}
+                        </select>
+                      </label>
+                      <label className="provider-field provider-key-field">
+                        <span>API Key</span>
+                        <Input aria-label="API Key" type="password" autoComplete="new-password" value={providerDraft.apiKey ?? ''} onValueChange={(value) => updateProviderRequestConfig({ apiKey: value })} placeholder={sourceProvider?.keyConfigured ? '留空保留现有加密密钥' : '可稍后补充'} />
+                        <small>密钥只会在本机加密保存，不会显示在配置列表。</small>
+                      </label>
+                      <div className="provider-field full-width">
+                        <span>模型</span>
+                        <div className="provider-model-choice-row">
+                          <select aria-label="选择模型" className="cap-sel provider-model-select" value={selectedModel} onChange={(event) => selectDraftModel(event.target.value)}>
+                            <option value="">请选择模型</option>
+                            {availableModelIds.map((id) => <option value={id} key={id}>{id}</option>)}
+                          </select>
+                          <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={modelFetchState.busy} onPress={() => void discoverModels()}>获取模型</Button>
+                        </div>
+                        {modelFetchState.message && <small role="status" className={`provider-fetch-status ${modelFetchState.error ? 'error' : 'success'}`}>{modelFetchState.message}</small>}
+                        <div className="provider-manual-model">
+                          <Input aria-label="手工输入模型 ID" size="sm" value={manualModelId} onValueChange={setManualModelId} placeholder="也可以手工输入模型 ID" onKeyDown={(event) => { if (event.key === 'Enter') addManualModel(); }} />
+                          <Button size="sm" variant="bordered" className="topic-outline-button" onPress={addManualModel}>使用此模型</Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </ModalBody>
+              {configEditorOpen ? (
+                <ModalFooter className="capability-config-modal-footer">
+                  <Button variant="light" onPress={() => { invalidateModelDiscovery(); setConfigEditorOpen(false); }}>取消编辑</Button>
+                  <Button color="primary" isLoading={providerSaving} onPress={() => void saveProvider()}>保存配置</Button>
+                </ModalFooter>
+              ) : (
+                <ModalFooter><Button variant="light" onPress={() => { closeCapabilitySettings(); onClose(); }}>完成</Button></ModalFooter>
+              )}
+            </>
+          )}
+        </ModalContent>
+      </Modal>
 
       {/* 首次运行环境 */}
       <div className="panel">
