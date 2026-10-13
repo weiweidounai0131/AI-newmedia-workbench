@@ -1,0 +1,9 @@
+# AI 新媒体工作台实际使用的 wechat-mp-tools 子集。
+# 仅支撑 workbench_app.py + 抖音下载 + 小红书下载。
+flask>=3.0,<4
+requests>=2.31
+httpx>=0.28,<0.29
+curl_cffi>=0.7
+lxml>=5.0
+pyyaml>=6.0
+xhshow>=0.2.0

@@ -23,12 +23,30 @@ afterPack: scripts/adhoc-sign-mac.cjs
 files:
   - out/**/*
   - package.json
+# 运行时资源采用白名单。resources 同时包含大量仅供构建使用的图标源文件、
+# iconset 与设计素材；这些不应被重复复制到安装后的 App Resources。
+# bootstrap 是首次安装本机抓取/下载运行环境所必需；update-source.json 由 CI
+# 在已配置更新源时动态生成，必须允许进入最终包。
 extraResources:
   - from: resources
     to: resources
     filter:
-      - "**/*"
-      - "!runtime/**"
+      - "bootstrap/**"
+      # MediaCrawler 上游仓库中的文档、测试与 WebUI 不参与工作台运行。
+      - "!bootstrap/media-crawler/upstream/.github/**"
+      - "!bootstrap/media-crawler/upstream/docs/**"
+      - "!bootstrap/media-crawler/upstream/tests/**"
+      - "!bootstrap/media-crawler/upstream/test/**"
+      - "!bootstrap/media-crawler/upstream/webui/**"
+      - "!bootstrap/media-crawler/upstream/media_platform/tieba/test_data/**"
+      # wechat-mp-tools 只由 workbench_app.py 提供抖音/小红书下载服务。
+      - "!bootstrap/wechat-mp-tools/.github/**"
+      - "!bootstrap/wechat-mp-tools/docs/**"
+      - "!bootstrap/wechat-mp-tools/frontend/**"
+      - "!bootstrap/wechat-mp-tools/backend/subtitle_remover/**"
+      - "licenses/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - "update-source.json"
 mac:
   target:
     - dmg

@@ -53,12 +53,13 @@ function systemBrowserPath(): string | null {
 
 function runtimeFiles(root: string | null) {
   if (!root) return { media: false, wechat: false };
+  const sharedPython = pythonExecutable(path.join(root, 'python'));
   return {
-    media: fs.existsSync(pythonExecutable(path.join(root, 'media-crawler', 'venv')))
+    media: fs.existsSync(sharedPython)
       && fs.existsSync(path.join(root, 'media-crawler', 'proxy', 'server.py'))
-      && fs.existsSync(path.join(root, 'media-crawler', 'upstream', 'main.py')),
-    wechat: fs.existsSync(pythonExecutable(path.join(root, 'wechat-mp-tools', 'venv')))
-      && fs.existsSync(path.join(root, 'wechat-mp-tools', 'app.py')),
+      && fs.existsSync(path.join(root, 'media-crawler', 'upstream', 'workbench_main.py')),
+    wechat: fs.existsSync(sharedPython)
+      && fs.existsSync(path.join(root, 'wechat-mp-tools', 'workbench_app.py')),
   };
 }
 
@@ -82,7 +83,7 @@ export async function runtimeSetupStatus(): Promise<RuntimeSetupStatus> {
   const ready = files.media && files.wechat && browserReady;
   return {
     packaged, ready, installing: !!installProcess, phase,
-    message: installProcess ? message : ready ? '抓取与下载环境已就绪。' : '首次使用需要下载本机运行环境（约 0.8–1.5 GB，取决于系统与网络）。',
+    message: installProcess ? message : ready ? '抓取与下载环境已就绪。' : '首次使用需要安装精简版本机运行环境；检测到 Chrome / Edge 时不会额外下载 Chromium。',
     components: [
       { id: 'media', label: '内容抓取环境', ready: files.media, detail: files.media ? '已安装' : '待安装' },
       { id: 'wechat', label: '本地下载工具', ready: files.wechat, detail: files.wechat ? '已安装' : '待安装' },
@@ -127,20 +128,29 @@ async function installRuntime(): Promise<void> {
   const dataRoot = await userRuntimeDataDir();
   phase = '准备安装资源'; message = '正在准备本机运行环境…';
   copyBootstrap(path.join(bootstrap, 'media-crawler'), path.join(installRoot, 'media-crawler', 'proxy'));
+  // bootstrap/media-crawler 内含 upstream；代理目录只需要 server/browser/search 等轻量文件，
+  // 先移除嵌套副本，再把 upstream 放到唯一的正式位置，避免运行环境重复一份源码。
+  fs.rmSync(path.join(installRoot, 'media-crawler', 'proxy', 'upstream'), { recursive: true, force: true });
   copyBootstrap(path.join(bootstrap, 'media-crawler', 'upstream'), path.join(installRoot, 'media-crawler', 'upstream'));
   copyBootstrap(path.join(bootstrap, 'wechat-mp-tools'), path.join(installRoot, 'wechat-mp-tools'));
   const uv = await installUv(path.join(dataRoot, 'bin'));
   const browserEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath() };
 
-  phase = '安装内容抓取环境'; message = '正在安装内容抓取所需的 Python 依赖…';
-  const mediaVenv = path.join(installRoot, 'media-crawler', 'venv');
-  await run(uv, ['venv', '--python', '3.13', mediaVenv]);
-  await run(uv, ['pip', 'install', '--python', pythonExecutable(mediaVenv), '-r', path.join(installRoot, 'media-crawler', 'proxy', 'requirements.txt'), '-r', path.join(installRoot, 'media-crawler', 'upstream', 'requirements.txt')], { env: browserEnv });
+  phase = '安装共享运行环境'; message = '正在安装抓取与下载共用的精简 Python 环境…';
+  const sharedVenv = path.join(installRoot, 'python');
+  fs.rmSync(sharedVenv, { recursive: true, force: true });
+  await run(uv, ['venv', '--python', '3.12', sharedVenv]);
+  const sharedPython = pythonExecutable(sharedVenv);
+  await run(uv, [
+    'pip', 'install', '--python', sharedPython,
+    '-r', path.join(installRoot, 'media-crawler', 'proxy', 'requirements.txt'),
+    '-r', path.join(installRoot, 'media-crawler', 'upstream', 'requirements.workbench.txt'),
+    '-r', path.join(installRoot, 'wechat-mp-tools', 'requirements.workbench.txt'),
+  ], { env: browserEnv });
 
-  phase = '安装下载工具'; message = '正在安装本地下载工具依赖…';
-  const wechatVenv = path.join(installRoot, 'wechat-mp-tools', 'venv');
-  await run(uv, ['venv', '--python', '3.12', wechatVenv]);
-  await run(uv, ['pip', 'install', '--python', pythonExecutable(wechatVenv), '-r', path.join(installRoot, 'wechat-mp-tools', 'requirements.txt')], { env: browserEnv });
+  // 新共享环境验证成功后再清理旧版双 venv，升级用户不会长期保留重复依赖。
+  fs.rmSync(path.join(installRoot, 'media-crawler', 'venv'), { recursive: true, force: true });
+  fs.rmSync(path.join(installRoot, 'wechat-mp-tools', 'venv'), { recursive: true, force: true });
 
   const existingBrowser = systemBrowserPath();
   if (existingBrowser) {
@@ -148,13 +158,13 @@ async function installRuntime(): Promise<void> {
   } else {
     phase = '下载 Chromium'; message = '未检测到 Chrome / Edge，正在从国内镜像下载 Chromium 浏览器运行时…';
     try {
-      await run(pythonExecutable(mediaVenv), ['-m', 'playwright', 'install', 'chromium'], {
+      await run(sharedPython, ['-m', 'playwright', 'install', 'chromium'], {
         env: { ...browserEnv, PLAYWRIGHT_DOWNLOAD_HOST: 'https://registry.npmmirror.com/-/binary/playwright' },
       });
     } catch (mirrorError) {
       phase = '重试下载 Chromium'; message = '国内镜像下载未完成，正在尝试备用下载源…';
       try {
-        await run(pythonExecutable(mediaVenv), ['-m', 'playwright', 'install', 'chromium'], { env: browserEnv });
+        await run(sharedPython, ['-m', 'playwright', 'install', 'chromium'], { env: browserEnv });
       } catch (fallbackError: any) {
         const detail = fallbackError?.message || (mirrorError as Error)?.message || '网络连接异常';
         throw new Error(`浏览器运行时下载失败。建议先安装 Google Chrome 或 Microsoft Edge 后重新打开工作台；如需继续下载，请检查网络或代理后重试。${detail ? `\n${detail}` : ''}`);

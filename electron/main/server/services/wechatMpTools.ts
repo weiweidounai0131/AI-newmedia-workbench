@@ -79,14 +79,21 @@ async function ensureService(): Promise<void> {
   if (startupPromise) return startupPromise;
   startupPromise = (async () => {
     const root = await toolRoot();
-    const bundledVenv = path.join(root, 'venv');
-    const python = pythonExecutable(fs.existsSync(bundledVenv) ? bundledVenv : path.join(root, 'venv312'));
-    const entry = path.join(root, 'app.py');
-    if (!fs.existsSync(python) || !fs.existsSync(entry)) {
-      throw new Error('本地下载服务未安装完成：缺少 wechat-mp-tools 运行环境');
+    const bundled = await bundledRuntimeRoot();
+    const sharedPython = bundled ? pythonExecutable(path.join(bundled, 'python')) : '';
+    const legacyVenv = path.join(root, 'venv');
+    const pythonCandidates = [
+      sharedPython,
+      pythonExecutable(fs.existsSync(legacyVenv) ? legacyVenv : path.join(root, 'venv312')),
+    ].filter(Boolean);
+    const python = pythonCandidates.find((candidate) => fs.existsSync(candidate)) || pythonCandidates[0];
+    const entryCandidates = [path.join(root, 'workbench_app.py'), path.join(root, 'app.py')];
+    const entry = entryCandidates.find((candidate) => fs.existsSync(candidate)) || entryCandidates[0];
+    if (!python || !fs.existsSync(python) || !fs.existsSync(entry)) {
+      throw new Error('本地下载服务未安装完成：缺少精简下载运行环境');
     }
     const dataRoot = path.join(await userRuntimeDataDir(), 'wechat-mp-tools');
-    const child = spawn(python, ['app.py', '--no-browser', '--port', '5200'], {
+    const child = spawn(python, [path.basename(entry), '--no-browser', '--port', '5200'], {
       cwd: root,
       detached: true,
       stdio: 'ignore',
