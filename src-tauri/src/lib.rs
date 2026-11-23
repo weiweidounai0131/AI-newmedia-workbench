@@ -43,6 +43,10 @@ pub fn run() {
             commands::library::read_library_word,
             commands::library::open_library_file,
             commands::library::read_library_image_data_url,
+            // 旧版 Electron 专属迁移工具
+            commands::migrate::inspect_legacy_migration,
+            commands::migrate::run_legacy_migration,
+            commands::migrate::cleanup_legacy_runtime,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AI新媒体工作台");

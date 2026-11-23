@@ -115,6 +115,45 @@ export interface PlatformCooldowns {
   platforms?: Record<string, { expiresAt: number; remainingSec: number; reason: 'normal' | 'risk_control' | null }>;
 }
 
+export interface LegacyMigrationPreview {
+  detected: boolean;
+  legacyDir: string | null;
+  hasSettings: boolean;
+  providerCount: number;
+  keyIds: string[];
+  rootDir: string | null;
+  xhsDownloadDir: string | null;
+  hasDouyinProfile: boolean;
+  hasXhsProfile: boolean;
+  runtimeBytes: number;
+}
+
+export interface MigrationOptions {
+  customLegacyDir?: string | null;
+  migrateSettings: boolean;
+  migrateKeys: boolean;
+  copyBrowserProfiles: boolean;
+}
+
+export interface MigrationReport {
+  ok: boolean;
+  legacyDir: string;
+  providersMigrated: number;
+  capsMigrated: number;
+  keysMigrated: string[];
+  keysFailed: { keyId: string; reason: string }[];
+  rootDirMigrated: boolean;
+  xhsDirMigrated: boolean;
+  profilesCopied: string[];
+  runtimeBytesReclaimable: number;
+}
+
+export interface CleanupRuntimeResult {
+  ok: boolean;
+  freedBytes: number;
+  message: string;
+}
+
 export interface LibraryResp {
   rootDir: string | null;
   missingFolders: ('选题' | '创意' | '洗稿' | '图片')[];
@@ -162,6 +201,17 @@ export const api = {
     }
     window.open(url, '_blank', 'noopener,noreferrer');
   },
+
+  // ---- Phase 2 专属旧版 Electron 迁移工具 ----
+  inspectLegacyMigration: (customDir?: string | null) =>
+    tauriInvoke<LegacyMigrationPreview>('inspect_legacy_migration', { customDir: customDir || null }),
+  runLegacyMigration: (options: MigrationOptions) =>
+    tauriInvoke<MigrationReport>('run_legacy_migration', { options }),
+  cleanupLegacyRuntime: (customDir: string | null | undefined, confirmPhrase: string) =>
+    tauriInvoke<CleanupRuntimeResult>('cleanup_legacy_runtime', {
+      customDir: customDir || null,
+      confirmPhrase,
+    }),
 
   // ---- 四能力 AI 设置与安全存储 ----
   getSettings: () => tauriInvoke<SettingsSummary>('get_settings'),
