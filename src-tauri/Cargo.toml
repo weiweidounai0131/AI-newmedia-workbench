@@ -1,0 +1,29 @@
+[package]
+name = "newmedia-workbench-rs"
+version = "1.0.0-alpha.1"
+description = "AI新媒体工作台（Tauri 2 + Rust 原生重构版）"
+authors = ["jiangjiawei"]
+edition = "2021"
+
+[lib]
+name = "newmedia_workbench_rs_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+thiserror = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true
