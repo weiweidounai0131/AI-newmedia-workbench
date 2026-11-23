@@ -5,7 +5,7 @@ pub mod downloader;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -47,7 +47,22 @@ pub fn run() {
             commands::migrate::inspect_legacy_migration,
             commands::migrate::run_legacy_migration,
             commands::migrate::cleanup_legacy_runtime,
+            // Phase 3 Rust 原生 CDP 引擎（扫码登录 / 登录态 / 主动搜索 / 冷却）
+            commands::scrape::scrape_status,
+            commands::scrape::scrape_cooldowns,
+            commands::scrape::scrape_login_qr,
+            commands::scrape::scrape_login_session,
+            commands::scrape::scrape_login,
+            commands::scrape::scrape_logout,
+            commands::scrape::search_content,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running AI新媒体工作台");
+        .build(tauri::generate_context!())
+        .expect("error while building AI新媒体工作台");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            // 退出工作台时干净回收本次拉起的浏览器进程，同时保留磁盘 Profile 登录态
+            cdp::manager::shutdown_all_sync();
+        }
+    });
 }

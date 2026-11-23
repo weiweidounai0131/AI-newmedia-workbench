@@ -389,14 +389,23 @@ export const api = {
     return { items: all.items, failed: all.failed, live: true, message: all.failed?.length ? `部分平台拉取失败：${all.failed.join('、')}` : undefined };
   },
 
-  // ---- Phase 3 / Phase 4 即将接入的原生 CDP 与原生下载器契约 ----
-  getSearch: async (_kw: string, platform: string): Promise<any> => ({
-    items: [],
-    live: false,
-    reason: 'phase3_pending',
-    message: `「${platform}」Rust 原生 CDP 主动搜索将在 Phase 3 接入，当前可先使用实时热榜与手动链接功能。`,
-  }),
+  // ---- Phase 3 已接通：Rust 原生 CDP 引擎（零 Python / 零 Playwright） ----
+  getSearch: (kw: string, platform: string): Promise<any> =>
+    tauriInvoke('search_content', { kw, platform }),
+  scrapeStatus: (): Promise<{ electron: boolean; platforms: Record<string, boolean> }> =>
+    tauriInvoke('scrape_status'),
+  scrapeCooldowns: (scope: 'topic' | 'rewrite'): Promise<PlatformCooldowns> =>
+    tauriInvoke('scrape_cooldowns', { scope }),
+  scrapeLogin: (platform: string): Promise<{ ok: boolean; connected: boolean; platforms: Record<string, boolean>; error?: string }> =>
+    tauriInvoke('scrape_login', { platform }),
+  scrapeLoginQr: (platform: string): Promise<QrResp> =>
+    tauriInvoke('scrape_login_qr', { platform }),
+  scrapeLoginSession: (platform: string): Promise<SessionResp> =>
+    tauriInvoke('scrape_login_session', { platform }),
+  scrapeLogout: (platform: string): Promise<boolean> =>
+    tauriInvoke('scrape_logout', { platform }),
 
+  // ---- Phase 4 即将接入：Rust 原生抖音/小红书无水印下载器 ----
   xigaoRecognizeLink: async (_body: { link: string; platform?: string }): Promise<any> => {
     throw new Error('抖音/小红书原生链接下载与识别将在 Phase 4 接入，当前可先使用手动文本洗稿。');
   },
@@ -417,25 +426,4 @@ export const api = {
   xigaoRecognizeSource: async (_sourceId: string): Promise<any> => {
     throw new Error('Phase 4 接入中');
   },
-  scrapeStatus: async (): Promise<{ electron: boolean; platforms: Record<string, boolean> }> => ({
-    electron: true,
-    platforms: { 抖音: false, 小红书: false },
-  }),
-  scrapeCooldowns: async (_scope: 'topic' | 'rewrite'): Promise<PlatformCooldowns> => ({ platforms: {} }),
-  scrapeLogin: async (_platform: string): Promise<{ ok: boolean; connected: boolean; platforms: Record<string, boolean>; error?: string }> => ({
-    ok: false,
-    connected: false,
-    platforms: { 抖音: false, 小红书: false },
-    error: 'Phase 3 原生 CDP 扫码登录即将接入',
-  }),
-  scrapeLoginQr: async (_platform: string): Promise<QrResp> => ({
-    connected: false,
-    qr: null,
-    headful: true,
-    error: 'Phase 3 原生 CDP 扫码登录即将接入',
-  }),
-  scrapeLoginSession: async (_platform: string): Promise<SessionResp> => ({
-    connected: false,
-    error: null,
-  }),
 };
