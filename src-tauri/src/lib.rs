@@ -55,6 +55,15 @@ pub fn run() {
             commands::scrape::scrape_login,
             commands::scrape::scrape_logout,
             commands::scrape::search_content,
+            // Phase 4 Rust 原生下载器与来源识别（替代 wechat-mp-tools）
+            commands::download::xigao_douyin_start,
+            commands::download::xigao_douyin_status,
+            commands::download::xigao_douyin_source,
+            commands::download::xigao_xhs_start,
+            commands::download::xigao_xhs_status,
+            commands::download::xigao_xhs_source,
+            commands::download::xigao_recognize_source,
+            commands::download::xigao_recognize_link,
         ])
         .build(tauri::generate_context!())
         .expect("error while building AI新媒体工作台");

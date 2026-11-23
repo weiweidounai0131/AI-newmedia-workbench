@@ -405,25 +405,21 @@ export const api = {
   scrapeLogout: (platform: string): Promise<boolean> =>
     tauriInvoke('scrape_logout', { platform }),
 
-  // ---- Phase 4 即将接入：Rust 原生抖音/小红书无水印下载器 ----
-  xigaoRecognizeLink: async (_body: { link: string; platform?: string }): Promise<any> => {
-    throw new Error('抖音/小红书原生链接下载与识别将在 Phase 4 接入，当前可先使用手动文本洗稿。');
-  },
-  xigaoDouyinStart: async (_link: string): Promise<any> => {
-    throw new Error('抖音原生无水印下载器（Rust a_bogus）将在 Phase 4 接入。');
-  },
-  xigaoDouyinStatus: async (_taskId: string): Promise<any> => ({ status: 'failed', error: 'Phase 4 接入中' }),
-  xigaoDouyinSource: async (_body: { path: string; title?: string }): Promise<any> => {
-    throw new Error('Phase 4 接入中');
-  },
-  xigaoXhsStart: async (_link: string): Promise<any> => {
-    throw new Error('小红书原生图文下载器将在 Phase 4 接入。');
-  },
-  xigaoXhsStatus: async (_taskId: string): Promise<any> => ({ status: 'failed', error: 'Phase 4 接入中' }),
-  xigaoXhsSource: async (_body: { path: string; title?: string }): Promise<any> => {
-    throw new Error('Phase 4 接入中');
-  },
-  xigaoRecognizeSource: async (_sourceId: string): Promise<any> => {
-    throw new Error('Phase 4 接入中');
-  },
+  // ---- Phase 4 已接通：Rust 原生抖音/小红书无水印下载器与来源识别（彻底替代 wechat-mp-tools） ----
+  xigaoRecognizeLink: (body: { link: string; platform?: string }): Promise<any> =>
+    tauriInvoke('xigao_recognize_link', { link: body.link }),
+  xigaoDouyinStart: (link: string): Promise<any> =>
+    tauriInvoke('xigao_douyin_start', { link }),
+  xigaoDouyinStatus: (taskId: string): Promise<any> =>
+    tauriInvoke('xigao_douyin_status', { taskId }),
+  xigaoDouyinSource: (body: { path: string; title?: string }): Promise<any> =>
+    tauriInvoke('xigao_douyin_source', { path: body.path, title: body.title ?? null }),
+  xigaoXhsStart: (link: string): Promise<any> =>
+    tauriInvoke('xigao_xhs_start', { link }),
+  xigaoXhsStatus: (taskId: string): Promise<any> =>
+    tauriInvoke('xigao_xhs_status', { taskId }),
+  xigaoXhsSource: (body: { path: string; title?: string }): Promise<any> =>
+    tauriInvoke('xigao_xhs_source', { path: body.path, title: body.title ?? null }),
+  xigaoRecognizeSource: (sourceId: string): Promise<any> =>
+    tauriInvoke('xigao_recognize_source', { sourceId }),
 };

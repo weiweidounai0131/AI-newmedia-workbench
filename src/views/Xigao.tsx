@@ -3,6 +3,7 @@ import { Button, Textarea, Input, Chip, Checkbox, Modal, ModalContent, ModalHead
 import { useApp, setXigao, exportTextToLib, addXigaoTableRecord, clearXigaoTable } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
+import { SpringProgress } from '../motion';
 import { useToastMsg } from '../lib/ui';
 import { extractHttpUrl } from '../lib/link';
 
@@ -44,6 +45,24 @@ export default function Xigao() {
   const [cooldowns, setCooldowns] = useState<Record<string, { expiresAt: number }>>({});
   const [clock, setClock] = useState(Date.now());
   const [wordExporting, setWordExporting] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState(0);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void api
+      .listen<{ taskId: string; percent: number; message: string; status: string }>('download-progress', (ev) => {
+        if (!x.parseTaskId || ev.taskId === x.parseTaskId) {
+          setDownloadPercent(ev.percent);
+          if (ev.message) setXigao({ parseStatusText: ev.message });
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [x.parseTaskId]);
   const loading = x.rewriteLoading;
   const req = x.rewriteRequirement;
   const parseStatus = x.parseStatus;
@@ -465,13 +484,19 @@ export default function Xigao() {
               </div>
             )}
             {!(douyinTaskError || xhsTaskError) && (
-              <div className="card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {(douyinTaskStatus !== 'completed' && xhsTaskStatus !== 'completed') && <Spinner size="sm" color="primary" />}
-                  <strong>{x.parseStatusText || '正在解析并下载素材，请稍候…'}</strong>
+              <div className="card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {(douyinTaskStatus !== 'completed' && xhsTaskStatus !== 'completed') && <Spinner size="sm" color="primary" />}
+                    <strong>{x.parseStatusText || '正在解析并下载素材，请稍候…'}</strong>
+                  </div>
+                  <span className="tiny" style={{ fontWeight: 700, color: 'var(--accent)' }}>
+                    {Math.round(douyinTaskStatus === 'completed' || xhsTaskStatus === 'completed' ? 100 : downloadPercent)}%
+                  </span>
                 </div>
+                <SpringProgress percent={douyinTaskStatus === 'completed' || xhsTaskStatus === 'completed' ? 100 : Math.max(8, downloadPercent)} />
                 <div className="tiny" style={{ color: 'var(--text-3)' }}>
-                  全程在 Rust 本地引擎内流式落盘，无需打开第三方工具窗口。
+                  全程在 Rust 本地引擎内流式落盘，共享工作台登录态，无需打开第三方工具窗口。
                 </div>
               </div>
             )}
