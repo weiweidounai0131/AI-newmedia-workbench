@@ -743,6 +743,14 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
   background:var(--surface);box-shadow:var(--shadow-sm);
   z-index:-1;pointer-events:none;
 }
+.xuanti-tab{position:relative;isolation:isolate}
+.xuanti-tab.active{background:transparent!important;box-shadow:none!important}
+.xuanti-tab-pill{
+  position:absolute;inset:0;border-radius:var(--radius-xs);
+  background:var(--surface);box-shadow:var(--shadow-sm);
+  border:1px solid var(--border);
+  z-index:-1;pointer-events:none;
+}
 .motion-page-stage{min-height:100%}
 .motion-modal-backdrop{
   position:fixed;inset:0;z-index:220;

@@ -3,6 +3,7 @@ import { Button, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader
 import { useApp, clearLibrarySetupRequest, setLib, setSettings } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
+import { ActivePill, MOTION_SPRING, PageTransition, m } from '../motion';
 import { useToastMsg } from '../lib/ui';
 import type { LibFile } from '../store/appStore';
 
@@ -155,19 +156,28 @@ export default function Sucai() {
         <div className="xuanti-tabs" role="tablist" style={{ marginBottom: 16 }}>
           {FOLDERS.map((folder) => (
             <button key={folder} className={`xuanti-tab ${tab === folder ? 'active' : ''}`} onClick={() => setTab(folder)}>
+              {tab === folder && <ActivePill layoutId="sucai-tab-pill" className="xuanti-tab-pill" />}
               <Icon name="folder" className="ic" size={18} /><span>{folder}</span><span className="count">{lib.filter((file) => file.folder === folder).length}</span>
             </button>
           ))}
         </div>
 
-        <div className="sucai-body">
+        <PageTransition viewKey={tab} className="sucai-body">
           {tab === '图片' ? (
             files.length ? <div className="img-grid">
-              {files.map((file) => <button className="img-cell" key={file.localPath} onClick={() => setPreview(file)}>
-                {imageUrl(file) ? <img className="img-thumb-img" src={imageUrl(file)} alt={file.name} /> : <div className="img-thumb"><Icon name="image" className="ic" size={26} /></div>}
-                <div className="img-name" title={file.name}>{file.name}</div>
-                <div className="img-foot"><span className="img-date tiny">{file.date} · {sizeText(file.size)}</span></div>
-              </button>)}
+              {files.map((file) => (
+                <m.button
+                  className="img-cell"
+                  key={file.localPath}
+                  onClick={() => setPreview(file)}
+                  whileHover={{ y: -2, transition: MOTION_SPRING.snappy }}
+                  whileTap={{ scale: 0.98, transition: MOTION_SPRING.snappy }}
+                >
+                  {imageUrl(file) ? <img className="img-thumb-img" src={imageUrl(file)} alt={file.name} /> : <div className="img-thumb"><Icon name="image" className="ic" size={26} /></div>}
+                  <div className="img-name" title={file.name}>{file.name}</div>
+                  <div className="img-foot"><span className="img-date tiny">{file.date} · {sizeText(file.size)}</span></div>
+                </m.button>
+              ))}
             </div> : <div className="sucai-empty"><Icon name="image" className="ic" size={30} /><div>「图片」文件夹暂无图片，去出图模块导出</div></div>
           ) : (
             files.length ? <div className="finder-list">
@@ -182,7 +192,7 @@ export default function Sucai() {
               })}
             </div> : <div className="sucai-empty"><Icon name="folder" className="ic" size={30} /><div>「{tab}」文件夹暂无文件，去对应模块导出</div></div>
           )}
-        </div>
+        </PageTransition>
       </>}
 
       <div className="tiny" style={{ marginTop: 14, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" className="ic" size={13} /> <span>此处只展示真实本地文件；删除、移动等文件管理请在电脑文件夹中完成。</span></div>

@@ -3,7 +3,7 @@ import { Button, Textarea, Input, Chip, Checkbox, Modal, ModalContent, ModalHead
 import { useApp, setXigao, exportTextToLib, addXigaoTableRecord, clearXigaoTable } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
-import { SpringProgress } from '../motion';
+import { ActivePill, SpringProgress } from '../motion';
 import { useToastMsg } from '../lib/ui';
 import { extractHttpUrl } from '../lib/link';
 
@@ -286,9 +286,11 @@ export default function Xigao() {
     <div className="xuanti-wrap">
       <div className="xuanti-tabs" role="tablist">
         <button className={`xuanti-tab ${tab === 'work' ? 'active' : ''}`} onClick={() => setTab('work')}>
+          {tab === 'work' && <ActivePill layoutId="xigao-tab-pill" className="xuanti-tab-pill" />}
           <Icon name="pen" className="ic" size={18} /> <span>洗稿</span>
         </button>
         <button className={`xuanti-tab ${tab === 'lib' ? 'active' : ''}`} onClick={() => setTab('lib')}>
+          {tab === 'lib' && <ActivePill layoutId="xigao-tab-pill" className="xuanti-tab-pill" />}
           <Icon name="inbox" className="ic" size={18} /> <span>洗稿表</span>
           {xigaoTable.length > 0 && <span className="count">{xigaoTable.length}</span>}
         </button>

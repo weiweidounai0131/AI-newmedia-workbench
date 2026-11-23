@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Spinner } from '@heroui/react';
 import { useApp, setView, WORKFLOW_STEPS, loadHotRanks } from '../store/appStore';
 import { Icon } from '../icons';
+import { MOTION_SPRING, StaggerItem, m } from '../motion';
 import { PLAT_COLORS } from '../data/sample';
 
 function clockStr(): string {
@@ -80,25 +81,32 @@ export default function Home() {
           </div>
           <div className="quick">
             {QUICK.map((q) => (
-              <a key={q.id} onClick={() => setView(q.id)}>
+              <m.a
+                key={q.id}
+                onClick={() => setView(q.id)}
+                whileHover={{ y: -2, transition: MOTION_SPRING.snappy }}
+                whileTap={{ scale: 0.985, transition: MOTION_SPRING.snappy }}
+              >
                 <Icon name={q.icon} className="ic" size={20} />
                 <div>
                   <div className="q-t">{q.t}</div>
                   <div className="q-d">{q.d}</div>
                 </div>
-              </a>
+              </m.a>
             ))}
           </div>
         </div>
       </div>
 
       <div className="stats">
-        {stats.map((s) => (
-          <div className="card stat" key={s.k}>
-            <div className="v">{s.v}</div>
-            <div className="k">{s.k}</div>
-            <div className="trend">{s.trend}</div>
-          </div>
+        {stats.map((s, idx) => (
+          <StaggerItem key={s.k} index={idx}>
+            <div className="card stat">
+              <div className="v">{s.v}</div>
+              <div className="k">{s.k}</div>
+              <div className="trend">{s.trend}</div>
+            </div>
+          </StaggerItem>
         ))}
       </div>
 
