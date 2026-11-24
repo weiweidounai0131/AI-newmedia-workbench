@@ -231,8 +231,10 @@ async fn extract_video_keyframes(video_path: &str) -> Result<Vec<VisionPart>, St
         let pattern_str = pattern.to_string_lossy().to_string();
         let vf = vf.to_string();
         async move {
-            tokio::process::Command::new(&ffmpeg)
-                .args([
+            let mut cmd = tokio::process::Command::new(&ffmpeg);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(0x0800_0000);
+            cmd.args([
                     "-hide_banner",
                     "-loglevel",
                     "error",

@@ -98,11 +98,14 @@ fn detect_system_proxy() -> Option<String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         if let Ok(out) = std::process::Command::new("reg")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             if out.status.success() {
@@ -1118,6 +1121,8 @@ pub async fn generate_codex_image(
         }
 
         let mut cmd = tokio::process::Command::new(&cli);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x0800_0000);
         cmd.env("PATH", enriched_child_path())
             .env("CODEX_HOME", &fast_codex_home);
         // 自动注入系统代理供 Codex CLI 访问外网，同时显式豁免本地回环地址

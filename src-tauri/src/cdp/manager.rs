@@ -124,12 +124,14 @@ fn cleanup_stale_profile_browser(user_data: &std::path::Path) {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         let escaped = dir_str.replace('\'', "''");
         let ps = format!(
             "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*--user-data-dir={escaped}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
         );
         let _ = Command::new("powershell.exe")
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
+            .creation_flags(0x0800_0000)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
