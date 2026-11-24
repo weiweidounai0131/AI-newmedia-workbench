@@ -728,12 +728,36 @@ fn extract_codex_thread_id(stdout: &str) -> Option<String> {
     None
 }
 
+/// 从用户 ~/.codex/config.toml 中读取顶层 model = "..."（不触碰任何密钥字段）
+fn read_user_codex_model(home: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join(".codex").join("config.toml")).ok()?;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            break; // 只读顶层字段，不读子表
+        }
+        if let Some(rest) = trimmed.strip_prefix("model") {
+            let rest = rest.trim_start();
+            if let Some(val) = rest.strip_prefix('=') {
+                let cleaned = val.trim().trim_matches('"').trim_matches('\'').trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 100% 还原旧版本机 Codex CLI 订阅出图逻辑（无需 API Key）
+/// 使用临时精简 CODEX_HOME（仅复用 auth.json + model_reasoning_effort="low"），
+/// 彻底跳过无效 MCP 重试、海量 Skills 扫描与阻塞的 SessionEnd Hook，大幅缩短生图耗时。
 pub async fn generate_codex_image(
     prompt: &str,
     size: Option<&str>,
     ref_imgs: &[VisionPart],
 ) -> Result<ImageResult, String> {
+    let started_at = std::time::Instant::now();
     let status = chutu_providers_status().await;
     if !status.codex.available {
         return Err(status.codex.message);
@@ -742,13 +766,34 @@ pub async fn generate_codex_image(
         .await
         .ok_or_else(|| "未检测到可用的 Codex CLI 或订阅登录".to_string())?;
     let home = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
-    let generated_root = home.join(".codex").join("generated_images");
-    std::fs::create_dir_all(&generated_root).map_err(|e| e.to_string())?;
+    let user_generated_root = home.join(".codex").join("generated_images");
+    let _ = std::fs::create_dir_all(&user_generated_root);
 
     let temp_dir = std::env::temp_dir().join(format!("newmedia-codex-img-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let fast_codex_home = temp_dir.join("codex-home");
+    let fast_generated_root = fast_codex_home.join("generated_images");
+    std::fs::create_dir_all(&fast_generated_root).map_err(|e| e.to_string())?;
 
     let result: Result<ImageResult, String> = async {
+        // 1. 构造精简隔离 CODEX_HOME：仅复制 auth.json + 极简 config.toml（reasoning=low，零无效 MCP/Hooks/Skills）
+        let src_auth = home.join(".codex").join("auth.json");
+        std::fs::copy(&src_auth, fast_codex_home.join("auth.json"))
+            .map_err(|e| format!("读取本机 Codex 登录凭证失败：{e}"))?;
+
+        let effective_model = std::env::var("NEWMEDIA_CODEX_IMAGEGEN_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| read_user_codex_model(&home));
+
+        let mut fast_cfg = String::new();
+        if let Some(ref m) = effective_model {
+            fast_cfg.push_str(&format!("model = \"{m}\"\n"));
+        }
+        fast_cfg.push_str("model_reasoning_effort = \"low\"\n");
+        std::fs::write(fast_codex_home.join("config.toml"), &fast_cfg)
+            .map_err(|e| format!("写入临时 Codex 配置失败：{e}"))?;
+
         let mut ref_paths = Vec::new();
         for (idx, ref_img) in ref_imgs.iter().take(14).enumerate() {
             let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
@@ -768,17 +813,18 @@ pub async fn generate_codex_image(
             ref_paths.push(file);
         }
 
-        // 仅在显式指定 NEWMEDIA_CODEX_IMAGEGEN_MODEL 时传 --model；默认沿用用户 ~/.codex/config.toml 当前有效模型，避免版本升级后硬编码模型失效
-        let custom_model = std::env::var("NEWMEDIA_CODEX_IMAGEGEN_MODEL")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
         let mut cmd = tokio::process::Command::new(&cli);
-        cmd.env("PATH", enriched_child_path());
+        cmd.env("PATH", enriched_child_path())
+            .env("CODEX_HOME", &fast_codex_home);
         // 自动注入系统代理供 Codex CLI 访问外网，同时显式豁免本地回环地址
         if let Some(proxy_url) = detect_system_proxy() {
-            crate::core::logger::info("codex", format!("injecting proxy for codex imagegen: {proxy_url}"));
+            crate::core::logger::info(
+                "codex",
+                format!(
+                    "start fast codex imagegen: model={} reasoning=low proxy={proxy_url}",
+                    effective_model.as_deref().unwrap_or("default")
+                ),
+            );
             cmd.env("HTTP_PROXY", &proxy_url)
                 .env("HTTPS_PROXY", &proxy_url)
                 .env("ALL_PROXY", &proxy_url)
@@ -787,6 +833,14 @@ pub async fn generate_codex_image(
                 .env("all_proxy", &proxy_url)
                 .env("NO_PROXY", "127.0.0.1,localhost,::1")
                 .env("no_proxy", "127.0.0.1,localhost,::1");
+        } else {
+            crate::core::logger::info(
+                "codex",
+                format!(
+                    "start fast codex imagegen: model={} reasoning=low proxy=none",
+                    effective_model.as_deref().unwrap_or("default")
+                ),
+            );
         }
         cmd.args([
             "exec",
@@ -798,11 +852,10 @@ pub async fn generate_codex_image(
             "-C",
             &temp_dir.to_string_lossy(),
             "--add-dir",
-            &generated_root.to_string_lossy(),
+            &fast_generated_root.to_string_lossy(),
+            "--add-dir",
+            &user_generated_root.to_string_lossy(),
         ]);
-        if let Some(ref m) = custom_model {
-            cmd.args(["--model", m]);
-        }
         for rp in &ref_paths {
             cmd.arg("-i").arg(rp);
         }
@@ -815,9 +868,9 @@ pub async fn generate_codex_image(
             .map_err(|e| format!("启动 Codex CLI 失败：{e}"))?;
 
         let prefix = if ref_paths.is_empty() {
-            "$imagegen"
+            "$imagegen Call imagegen immediately once without extra analysis:"
         } else {
-            "$imagegen Edit the attached reference image(s):"
+            "$imagegen Edit the attached reference image(s) immediately once without extra analysis:"
         };
         let full_prompt = format!("{prefix} {prompt}\nAspect ratio: {}.", codex_aspect(size));
 
@@ -832,14 +885,17 @@ pub async fn generate_codex_image(
             .map_err(|_| "Codex 订阅出图超时（5 分钟）".to_string())?
             .map_err(|e| format!("执行 Codex CLI 失败：{e}"))?;
 
+        let elapsed_ms = started_at.elapsed().as_millis();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if !output.status.success() {
             crate::core::logger::error(
                 "codex",
-                format!("codex exec exited {}: stdout={} | stderr={}", output.status, stdout, stderr),
+                format!(
+                    "codex exec failed after {elapsed_ms}ms ({}): stdout={} | stderr={}",
+                    output.status, stdout, stderr
+                ),
             );
-            // 优先从 stdout JSON 事件中提取精准的 turn.failed / error 消息，屏蔽无关 MCP/skills 启动日志
             let json_err = stdout.lines().rev().find_map(|line| {
                 let val = serde_json::from_str::<Value>(line).ok()?;
                 let kind = val.get("type")?.as_str()?;
@@ -865,30 +921,63 @@ pub async fn generate_codex_image(
             return Err(format!("Codex 订阅出图失败：{msg}"));
         }
 
+        let usage_summary = stdout
+            .lines()
+            .rev()
+            .find_map(|line| {
+                let val = serde_json::from_str::<Value>(line).ok()?;
+                if val.get("type")?.as_str()? == "turn.completed" {
+                    val.get("usage").map(|u| u.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".into());
+        crate::core::logger::info(
+            "codex",
+            format!("codex imagegen completed in {elapsed_ms}ms; usage={usage_summary}"),
+        );
+
         let thread_id = extract_codex_thread_id(&stdout)
             .ok_or_else(|| "Codex 未返回图片任务标识，无法读取生成文件".to_string())?;
-        let thread_dir = generated_root.join(&thread_id);
-        let mut all_images: Vec<String> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&thread_dir) {
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().to_string();
-                let lower = name.to_lowercase();
-                if lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".webp") {
-                    all_images.push(name);
+
+        // 同时检查隔离 CODEX_HOME 与默认 ~/.codex 两个 generated_images 位置
+        let candidate_dirs = [
+            fast_generated_root.join(&thread_id),
+            user_generated_root.join(&thread_id),
+        ];
+        let mut found_file: Option<std::path::PathBuf> = None;
+        for dir in &candidate_dirs {
+            let mut imgs: Vec<String> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for e in entries.flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let lower = name.to_lowercase();
+                    if lower.ends_with(".png")
+                        || lower.ends_with(".jpg")
+                        || lower.ends_with(".jpeg")
+                        || lower.ends_with(".webp")
+                    {
+                        imgs.push(name);
+                    }
                 }
             }
+            imgs.sort();
+            if let Some(chosen) = imgs
+                .iter()
+                .find(|n| n.starts_with("ig_") || n.starts_with("call_"))
+                .or_else(|| imgs.first())
+            {
+                found_file = Some(dir.join(chosen));
+                break;
+            }
         }
-        all_images.sort();
-        let chosen = all_images
-            .iter()
-            .find(|n| n.starts_with("ig_") || n.starts_with("call_"))
-            .or_else(|| all_images.first())
-            .cloned()
-            .ok_or_else(|| "Codex 已完成，但未在本地写出图片文件".to_string())?;
 
-        let bytes = std::fs::read(thread_dir.join(&chosen))
+        let img_path = found_file
+            .ok_or_else(|| "Codex 已完成，但未在本地写出图片文件".to_string())?;
+        let bytes = std::fs::read(&img_path)
             .map_err(|e| format!("读取 Codex 生成图片失败：{e}"))?;
-        let _ = std::fs::remove_dir_all(&thread_dir);
+        let _ = std::fs::remove_dir_all(user_generated_root.join(&thread_id));
         if bytes.len() < 1024 {
             return Err("Codex 返回的图片文件异常".into());
         }
