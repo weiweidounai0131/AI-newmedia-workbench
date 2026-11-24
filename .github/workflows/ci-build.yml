@@ -207,7 +207,6 @@ jobs:
           NODE
 
       - name: Upload v2 updater assets & latest.json to Aliyun OSS
-        if: ${{ secrets.ALIYUN_OSS_BUCKET != '' && secrets.ALIYUN_OSS_REGION != '' && secrets.ALIYUN_OSS_ACCESS_KEY_ID != '' && secrets.ALIYUN_OSS_ACCESS_KEY_SECRET != '' }}
         env:
           ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
           ALIYUN_OSS_REGION: ${{ secrets.ALIYUN_OSS_REGION }}
@@ -215,6 +214,10 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
           AWS_EC2_METADATA_DISABLED: 'true'
         run: |
+          if [ -z "$ALIYUN_OSS_BUCKET" ] || [ -z "$ALIYUN_OSS_REGION" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "Aliyun OSS secrets not configured, skipping."
+            exit 0
+          fi
           oss_region="${ALIYUN_OSS_REGION#oss-}"
           oss_endpoint="https://oss-${oss_region}.aliyuncs.com"
           aws_config_file="$RUNNER_TEMP/aws-oss-config"
@@ -240,7 +243,6 @@ jobs:
             --no-progress
 
       - name: Upload v2 updater assets & latest.json to Cloudflare R2
-        if: ${{ secrets.R2_ACCOUNT_ID != '' && secrets.R2_BUCKET != '' && secrets.R2_ACCESS_KEY_ID != '' && secrets.R2_SECRET_ACCESS_KEY != '' }}
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -249,6 +251,10 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_EC2_METADATA_DISABLED: 'true'
         run: |
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "Cloudflare R2 secrets not configured, skipping."
+            exit 0
+          fi
           r2_endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
           for f in dist-upload/*.tar.gz dist-upload/*.dmg dist-upload/*.exe; do
             [ -f "$f" ] || continue
