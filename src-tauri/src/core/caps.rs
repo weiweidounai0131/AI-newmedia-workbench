@@ -71,8 +71,9 @@ pub enum ProviderProtocol {
 impl ProviderProtocol {
     pub fn supports_cap(&self, cap: CapId) -> bool {
         match cap {
-            CapId::Image | CapId::VisionVideo => *self == ProviderProtocol::OpenaiChatCompletions,
-            CapId::Text | CapId::VisionImg => true,
+            // 图片生成走 OpenAI Images 兼容接口；文字 / 图片识别 / 视频识别（关键帧序列）全面支持 3 种协议
+            CapId::Image => *self == ProviderProtocol::OpenaiChatCompletions,
+            CapId::Text | CapId::VisionImg | CapId::VisionVideo => true,
         }
     }
 }

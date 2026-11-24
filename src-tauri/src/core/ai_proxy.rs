@@ -130,9 +130,22 @@ fn detect_system_proxy() -> Option<String> {
     None
 }
 
-fn build_http_client(timeout_secs: u64) -> Result<Client, String> {
+fn is_loopback_base_url(base_url: &str) -> bool {
+    if let Ok(parsed) = url::Url::parse(base_url) {
+        if let Some(host) = parsed.host_str() {
+            let h = host.to_lowercase();
+            return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "[::1]";
+        }
+    }
+    false
+}
+
+fn build_http_client_for(base_url: &str, timeout_secs: u64) -> Result<Client, String> {
     let mut builder = Client::builder().timeout(Duration::from_secs(timeout_secs));
-    if let Some(proxy_url) = detect_system_proxy() {
+    // 本机中转网关（如 http://127.0.0.1:3050/v1）必须直连，严禁绕道系统外网代理
+    if is_loopback_base_url(base_url) {
+        builder = builder.no_proxy();
+    } else if let Some(proxy_url) = detect_system_proxy() {
         if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
             builder = builder.proxy(proxy);
         }
@@ -140,6 +153,41 @@ fn build_http_client(timeout_secs: u64) -> Result<Client, String> {
     builder
         .build()
         .map_err(|e| format!("初始化 HTTP 客户端失败：{e}"))
+}
+
+async fn log_and_map_http_error(
+    resp: reqwest::Response,
+    cap: Option<CapId>,
+    model: &str,
+    protocol: ProviderProtocol,
+) -> String {
+    let status = resp.status().as_u16();
+    let raw_body = resp.text().await.unwrap_or_default();
+    let snippet: String = raw_body.trim().chars().take(300).collect();
+    crate::core::logger::error(
+        "ai_proxy",
+        format!(
+            "http error status={status} cap={:?} proto={:?} model={model} body={snippet}",
+            cap, protocol
+        ),
+    );
+    let base_msg = map_http_error(status, cap);
+    if !snippet.is_empty() && status >= 400 && status != 401 && status != 403 {
+        // 尝试提取 JSON 中的 error.message 以便用户快速定位（如模型不支持视觉/超限等）
+        if let Ok(v) = serde_json::from_str::<Value>(&raw_body) {
+            if let Some(msg) = v
+                .pointer("/error/message")
+                .or_else(|| v.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let short: String = msg.chars().take(180).collect();
+                return format!("{base_msg}：{short}");
+            }
+        }
+    }
+    base_msg
 }
 
 fn map_http_error(status: u16, cap: Option<CapId>) -> String {
@@ -248,7 +296,7 @@ pub async fn fetch_provider_models(
         .or_else(|| saved.as_ref().and_then(|p| settings::get_key_plaintext(&stored, &p.key_id)))
         .ok_or_else(|| "请先填写 API Key；也可手工添加模型 ID".to_string())?;
 
-    let client = build_http_client(20)?;
+    let client = build_http_client_for(&base_url, 20)?;
     let url = endpoint(&base_url, "/models");
     let mut req = client.get(&url);
     if proto == ProviderProtocol::AnthropicMessages {
@@ -264,7 +312,7 @@ pub async fn fetch_provider_models(
         .await
         .map_err(|e| format!("获取模型列表超时或网络失败：{e}"))?;
     if !resp.status().is_success() {
-        return Err(map_http_error(resp.status().as_u16(), None));
+        return Err(log_and_map_http_error(resp, None, "models", proto).await);
     }
 
     let body: Value = resp
@@ -300,7 +348,7 @@ async fn call_text_with_snapshot(
     temperature: f32,
     timeout_secs: u64,
 ) -> Result<TextResult, String> {
-    let client = build_http_client(timeout_secs)?;
+    let client = build_http_client_for(&snapshot.provider.base_url, timeout_secs)?;
     let resp = match snapshot.provider.protocol {
         ProviderProtocol::OpenaiChatCompletions => {
             let mut messages = Vec::new();
@@ -357,7 +405,10 @@ async fn call_text_with_snapshot(
     .map_err(|e| format!("AI 请求失败，请检查网络或代理设置：{e}"))?;
 
     if !resp.status().is_success() {
-        return Err(map_http_error(resp.status().as_u16(), Some(snapshot.cap)));
+        return Err(
+            log_and_map_http_error(resp, Some(snapshot.cap), &snapshot.model, snapshot.provider.protocol)
+                .await,
+        );
     }
     let body: Value = resp
         .json()
@@ -394,8 +445,23 @@ pub async fn recognize_media(
     system: Option<&str>,
 ) -> Result<TextResult, String> {
     let snapshot = settings::resolve_request(cap, None)?;
-    let client = build_http_client(150)?;
-    let prompt_text = "请忠实识别并提取上述素材中的全部关键信息、画面要点与可读文字，输出清晰完整的中文稿件供后续改写。";
+    let client = build_http_client_for(&snapshot.provider.base_url, 150)?;
+    crate::core::logger::info(
+        "ai_proxy",
+        format!(
+            "recognize_media cap={:?} proto={:?} model={} parts={} base_loopback={}",
+            cap,
+            snapshot.provider.protocol,
+            snapshot.model,
+            parts.len(),
+            is_loopback_base_url(&snapshot.provider.base_url)
+        ),
+    );
+    let prompt_text = if cap == CapId::VisionVideo {
+        "以下是一段短视频按时间均匀抽取的关键画面帧。请结合画面内容、字幕文字与场景变化，完整还原该视频的核心口播观点、步骤要点与结构，输出清晰完整的中文稿件供后续洗稿改写。"
+    } else {
+        "请忠实识别并提取上述素材中的全部关键信息、画面要点与可读文字，输出清晰完整的中文稿件供后续改写。"
+    };
 
     let resp = match snapshot.provider.protocol {
         ProviderProtocol::OpenaiChatCompletions => {
@@ -498,10 +564,16 @@ pub async fn recognize_media(
                 .await
         }
     }
-    .map_err(|e| format!("多模态识别请求失败：{e}"))?;
+    .map_err(|e| {
+        crate::core::logger::error("ai_proxy", format!("recognize_media transport error: {e}"));
+        format!("多模态识别请求失败：{e}")
+    })?;
 
     if !resp.status().is_success() {
-        return Err(map_http_error(resp.status().as_u16(), Some(cap)));
+        return Err(
+            log_and_map_http_error(resp, Some(cap), &snapshot.model, snapshot.provider.protocol)
+                .await,
+        );
     }
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
     let text = match snapshot.provider.protocol {
@@ -529,7 +601,7 @@ pub async fn generate_image(
     if snapshot.provider.protocol != ProviderProtocol::OpenaiChatCompletions {
         return Err("当前出图槽位仅支持 OpenAI Images 兼容协议".into());
     }
-    let client = build_http_client(300)?;
+    let client = build_http_client_for(&snapshot.provider.base_url, 300)?;
     let size_val = size.unwrap_or("1024x1536");
     let quality_val = quality.unwrap_or("auto");
 
@@ -584,7 +656,10 @@ pub async fn generate_image(
     };
 
     if !resp.status().is_success() {
-        return Err(map_http_error(resp.status().as_u16(), Some(CapId::Image)));
+        return Err(
+            log_and_map_http_error(resp, Some(CapId::Image), &snapshot.model, snapshot.provider.protocol)
+                .await,
+        );
     }
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
     let mut images = Vec::new();

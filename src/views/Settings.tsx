@@ -330,7 +330,8 @@ export default function Settings() {
   }
 
   function protocolAllowed(protocol: ProviderDraftRequest['protocol'], cap: CapId) {
-    return !((cap === 'image' || cap === 'visionVideo') && protocol !== 'openai-chat-completions');
+    // 仅图片生成槽位走 OpenAI Images 兼容接口；文字 / 图片识别 / 视频识别（关键帧序列）全面支持三种协议
+    return !(cap === 'image' && protocol !== 'openai-chat-completions');
   }
 
   async function saveProvider() {
@@ -595,7 +596,7 @@ export default function Settings() {
                           }}
                         >
                           <option value="openai-chat-completions">OpenAI Chat Completions</option>
-                          {configModalCap !== 'image' && configModalCap !== 'visionVideo' && <>
+                          {configModalCap !== 'image' && <>
                             <option value="openai-responses">OpenAI Responses</option>
                             <option value="anthropic-messages">Anthropic Messages</option>
                           </>}

@@ -104,7 +104,7 @@ export default function Xigao() {
           if (source.error || !source.sourceId || (isDouyin && !source.feedback)) throw new Error(source.error || '下载完成，但未能导入洗稿工作台');
           const successText = isDouyin ? '解析成功：抖音视频已下载，可以开始识别内容' : '解析成功：小红书图片和文案已下载，可以开始识别内容';
           setXigao({
-            stage: 'source', recog: '', recogMsg: '', mediaType: isDouyin ? 'video' : 'image', vlModel: 'wechat-mp-tools',
+            stage: 'source', recog: '', recogMsg: '', mediaType: isDouyin ? 'video' : 'image', vlModel: '本地解析',
             importTitle: source.title || x.importTitle, sourceId: source.sourceId, sourceFeedback: source.feedback || null,
             parseStatus: 'success', parseStatusText: successText, parseTaskId: '', parseTaskStatus: 'completed', parseTaskError: '', parseModalOpen: false,
           });
@@ -150,7 +150,7 @@ export default function Xigao() {
     }
   }
 
-  // 链接解析：抖音、小红书均委托 wechat-mp-tools 下载到本地后再识别。
+  // 链接解析：抖音、小红书均由 Rust 本地原生引擎下载后再识别。
   async function runRecognize() {
     if (x.parseStatus === 'loading') return toast('链接仍在解析中，请等待完成后再操作', 'warning');
     const rawLink = x.link.trim();
@@ -166,15 +166,15 @@ export default function Xigao() {
     try {
       if (detectedPlatform === '抖音') {
         const task = await api.xigaoDouyinStart(link);
-        if (task.error || !task.taskId) throw new Error(task.error || '未能启动 wechat-mp-tools 下载');
-        setXigao({ parseTaskId: task.taskId, parseTaskPlatform: '抖音', parseTaskStatus: 'starting', parseModalOpen: true, parseStatusText: '正在调用抖音下载工具解析视频…' });
-        toast('已打开 wechat-mp-tools 原解析页面，正在下载抖音视频', 'default');
+        if (task.error || !task.taskId) throw new Error(task.error || '未能启动抖音视频下载');
+        setXigao({ parseTaskId: task.taskId, parseTaskPlatform: '抖音', parseTaskStatus: 'starting', parseModalOpen: true, parseStatusText: '正在后台解析并下载抖音无水印视频…' });
+        toast('正在后台下载抖音无水印视频', 'default');
         return;
       }
       const task = await api.xigaoXhsStart(link);
-      if (task.error || !task.taskId) throw new Error(task.error || '未能启动 wechat-mp-tools 小红书下载');
-      setXigao({ parseTaskId: task.taskId, parseTaskPlatform: '小红书', parseTaskStatus: 'starting', parseModalOpen: true, parseStatusText: '正在调用小红书下载工具解析图文…' });
-      toast('已打开 wechat-mp-tools 原解析页面，正在下载图片和文案', 'default');
+      if (task.error || !task.taskId) throw new Error(task.error || '未能启动小红书图文下载');
+      setXigao({ parseTaskId: task.taskId, parseTaskPlatform: '小红书', parseTaskStatus: 'starting', parseModalOpen: true, parseStatusText: '正在后台解析并下载小红书图文…' });
+      toast('正在后台下载小红书图片和文案', 'default');
       return;
     } catch (e: any) {
       const message = e?.message || '来源检查失败';

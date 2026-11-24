@@ -182,6 +182,124 @@ pub fn import_xhs_note(note_dir: &str, title: Option<String>) -> Result<SourceSn
     })
 }
 
+fn find_ffmpeg_path() -> Option<String> {
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push("/opt/homebrew/bin/ffmpeg");
+        candidates.push("/usr/local/bin/ffmpeg");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(r"C:\ffmpeg\bin\ffmpeg.exe");
+    }
+    for c in candidates {
+        if Path::new(c).is_file() {
+            return Some(c.to_string());
+        }
+    }
+    let bin = if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    if std::process::Command::new(bin)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return Some(bin.to_string());
+    }
+    None
+}
+
+/// 从本地视频按时间均匀抽取最多 6 帧轻量化关键帧 JPEG（宽度缩至 ≤960px，兼容全部 3 种多模态协议且永不爆请求体）
+async fn extract_video_keyframes(video_path: &str) -> Result<Vec<VisionPart>, String> {
+    let ffmpeg = find_ffmpeg_path()
+        .ok_or_else(|| "未检测到 FFmpeg，无法抽取视频关键帧".to_string())?;
+    let temp_dir = std::env::temp_dir().join(format!("newmedia-frames-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时抽帧目录失败：{e}"))?;
+
+    let pattern = temp_dir.join("frame-%02d.jpg");
+    // 先尝试按 1/5 秒采样（常规短视频），若视频很短不足 2 帧再按 1fps 兜底
+    let run_ffmpeg = |vf: &str| {
+        let ffmpeg = ffmpeg.clone();
+        let video_path = video_path.to_string();
+        let pattern_str = pattern.to_string_lossy().to_string();
+        let vf = vf.to_string();
+        async move {
+            tokio::process::Command::new(&ffmpeg)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    &video_path,
+                    "-vf",
+                    &vf,
+                    "-q:v",
+                    "5",
+                    "-frames:v",
+                    "6",
+                    &pattern_str,
+                ])
+                .output()
+                .await
+        }
+    };
+
+    let _ = run_ffmpeg("fps=1/5,scale='min(960,iw)':-2").await;
+    let mut frame_paths: Vec<std::path::PathBuf> = fs::read_dir(&temp_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jpg"))
+        .collect();
+    if frame_paths.is_empty() {
+        let _ = run_ffmpeg("fps=1,scale='min(960,iw)':-2").await;
+        frame_paths = fs::read_dir(&temp_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jpg"))
+            .collect();
+    }
+    frame_paths.sort();
+
+    let mut parts = Vec::new();
+    let mut total_bytes = 0usize;
+    for fp in frame_paths.into_iter().take(6) {
+        if let Ok(bytes) = fs::read(&fp) {
+            if !bytes.is_empty() {
+                total_bytes += bytes.len();
+                parts.push(VisionPart {
+                    part_type: "image".into(),
+                    data: B64.encode(bytes),
+                    mime: Some("image/jpeg".into()),
+                });
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if parts.is_empty() {
+        return Err("FFmpeg 未能从视频中抽取出有效画面帧".into());
+    }
+    crate::core::logger::info(
+        "source:video",
+        format!("extracted {} keyframes ({} KB) via ffmpeg", parts.len(), total_bytes / 1024),
+    );
+    Ok(parts)
+}
+
 pub async fn recognize_source(source_id: &str) -> Result<RecognizeSourceResp, String> {
     let src = {
         let guard = SOURCE_CACHE.lock().unwrap();
@@ -207,28 +325,44 @@ pub async fn recognize_source(source_id: &str) -> Result<RecognizeSourceResp, St
     }
 
     let mut parts = Vec::new();
-    let max_files = if src.media_type == "video" { 1 } else { 6 };
-    for file in src.files.iter().take(max_files) {
-        let bytes = fs::read(file).map_err(|e| format!("读取本地素材失败：{e}"))?;
-        let lower = file.to_lowercase();
-        let mime = if lower.ends_with(".mp4") {
-            "video/mp4"
-        } else if lower.ends_with(".png") {
-            "image/png"
-        } else if lower.ends_with(".webp") {
-            "image/webp"
-        } else {
-            "image/jpeg"
-        };
-        parts.push(VisionPart {
-            part_type: if src.media_type == "video" {
-                "video".into()
+    if src.media_type == "video" {
+        let video_file = &src.files[0];
+        // 优先使用 FFmpeg 抽取轻量化关键帧图片序列（兼容性最强，支持 OpenAI/Responses/Anthropic 全部协议，且避免几十 MB MP4 撑爆网关）
+        match extract_video_keyframes(video_file).await {
+            Ok(frames) => parts = frames,
+            Err(frame_err) => {
+                crate::core::logger::warn("source:video", format!("keyframe extract fallback: {frame_err}"));
+                let bytes = fs::read(video_file).map_err(|e| format!("读取本地视频失败：{e}"))?;
+                if bytes.len() > 15 * 1024 * 1024 {
+                    return Err(format!(
+                        "{frame_err}；且该视频体积达 {:.1} MB（超过直传限制），请安装 FFmpeg 后重试",
+                        bytes.len() as f64 / 1024.0 / 1024.0
+                    ));
+                }
+                parts.push(VisionPart {
+                    part_type: "video".into(),
+                    data: B64.encode(bytes),
+                    mime: Some("video/mp4".into()),
+                });
+            }
+        }
+    } else {
+        for file in src.files.iter().take(6) {
+            let bytes = fs::read(file).map_err(|e| format!("读取本地素材失败：{e}"))?;
+            let lower = file.to_lowercase();
+            let mime = if lower.ends_with(".png") {
+                "image/png"
+            } else if lower.ends_with(".webp") {
+                "image/webp"
             } else {
-                "image".into()
-            },
-            data: B64.encode(bytes),
-            mime: Some(mime.into()),
-        });
+                "image/jpeg"
+            };
+            parts.push(VisionPart {
+                part_type: "image".into(),
+                data: B64.encode(bytes),
+                mime: Some(mime.into()),
+            });
+        }
     }
 
     let cap = if src.media_type == "video" {
@@ -236,7 +370,12 @@ pub async fn recognize_source(source_id: &str) -> Result<RecognizeSourceResp, St
     } else {
         CapId::VisionImg
     };
-    let ai = ai_proxy::recognize_media(cap, &parts, None).await?;
+    let sys_hint = src
+        .title
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| format!("该素材的原标题为：「{t}」。请结合标题与画面信息忠实提炼完整中文稿件。"));
+    let ai = ai_proxy::recognize_media(cap, &parts, sys_hint.as_deref()).await?;
     let merged = if let Some(raw_text) = src.text.filter(|t| !t.is_empty()) {
         format!("{raw_text}\n\n---\n【AI 视觉补充识别】\n{}", ai.text)
     } else {
