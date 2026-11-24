@@ -6,7 +6,7 @@ import type { HotItem, SearchItem } from '../data/sample';
 import { api } from '../api/client';
 
 export type CapId = 'text' | 'visionImg' | 'visionVideo' | 'image';
-export type ProviderProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic-messages';
+export type ProviderProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic-messages' | 'gemini-native';
 
 export interface ProviderModelSummary {
   id: string;

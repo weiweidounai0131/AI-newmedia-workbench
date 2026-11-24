@@ -348,8 +348,9 @@ export default function Settings() {
   }
 
   function protocolAllowed(protocol: ProviderDraftRequest['protocol'], cap: CapId) {
-    // 仅图片生成槽位走 OpenAI Images 兼容接口；文字 / 图片识别 / 视频识别（关键帧序列）全面支持三种协议
-    return !(cap === 'image' && protocol !== 'openai-chat-completions');
+    // 全部 4 个能力槽位均支持三种通用协议；Google Gemini 原生协议额外供图片生成槽位使用
+    if (protocol === 'gemini-native') return cap === 'image';
+    return true;
   }
 
   async function saveProvider() {
@@ -629,10 +630,11 @@ export default function Settings() {
                           }}
                         >
                           <option value="openai-chat-completions">OpenAI Chat Completions</option>
-                          {configModalCap !== 'image' && <>
-                            <option value="openai-responses">OpenAI Responses</option>
-                            <option value="anthropic-messages">Anthropic Messages</option>
-                          </>}
+                          <option value="openai-responses">OpenAI Responses</option>
+                          <option value="anthropic-messages">Anthropic Messages</option>
+                          {configModalCap === 'image' && (
+                            <option value="gemini-native">Google Gemini</option>
+                          )}
                         </select>
                       </label>
                       <label className="provider-field provider-key-field">

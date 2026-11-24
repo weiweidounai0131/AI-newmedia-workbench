@@ -66,14 +66,19 @@ pub enum ProviderProtocol {
     OpenaiResponses,
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
+    #[serde(rename = "gemini-native")]
+    GeminiNative,
 }
 
 impl ProviderProtocol {
     pub fn supports_cap(&self, cap: CapId) -> bool {
-        match cap {
-            // 图片生成走 OpenAI Images 兼容接口；文字 / 图片识别 / 视频识别（关键帧序列）全面支持 3 种协议
-            CapId::Image => *self == ProviderProtocol::OpenaiChatCompletions,
-            CapId::Text | CapId::VisionImg | CapId::VisionVideo => true,
+        match self {
+            // 三大通用协议全面放开给文字 / 图片识别 / 视频识别 / 图片生成全部 4 个能力槽位
+            ProviderProtocol::OpenaiChatCompletions
+            | ProviderProtocol::OpenaiResponses
+            | ProviderProtocol::AnthropicMessages => true,
+            // Google Gemini 原生 generateContent 生图协议专供图片生成槽位
+            ProviderProtocol::GeminiNative => cap == CapId::Image,
         }
     }
 }
@@ -117,7 +122,7 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             models: vec![ProviderModel {
                 id: "deepseek-chat".into(),
                 label: None,
-                capabilities: vec![CapId::Text],
+                capabilities: vec![CapId::Text, CapId::VisionImg, CapId::VisionVideo],
             }],
             builtin: true,
             revision: 1,
@@ -130,11 +135,18 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             key_id: "zhipu".into(),
             base_url: "https://open.bigmodel.cn/api/paas/v4/".into(),
             protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![ProviderModel {
-                id: "glm-4v-flash".into(),
-                label: None,
-                capabilities: vec![CapId::VisionImg],
-            }],
+            models: vec![
+                ProviderModel {
+                    id: "glm-4.5-air".into(),
+                    label: Some("GLM-4.5-Air".into()),
+                    capabilities: vec![CapId::Text],
+                },
+                ProviderModel {
+                    id: "glm-4v-flash".into(),
+                    label: None,
+                    capabilities: vec![CapId::VisionImg, CapId::VisionVideo],
+                },
+            ],
             builtin: true,
             revision: 1,
             scope_cap: None,
@@ -146,11 +158,18 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             key_id: "qwen".into(),
             base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".into(),
             protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![ProviderModel {
-                id: "qwen-vl-max".into(),
-                label: None,
-                capabilities: vec![CapId::VisionVideo],
-            }],
+            models: vec![
+                ProviderModel {
+                    id: "qwen-plus".into(),
+                    label: None,
+                    capabilities: vec![CapId::Text],
+                },
+                ProviderModel {
+                    id: "qwen-vl-max".into(),
+                    label: None,
+                    capabilities: vec![CapId::VisionImg, CapId::VisionVideo],
+                },
+            ],
             builtin: true,
             revision: 1,
             scope_cap: None,

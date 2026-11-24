@@ -1163,18 +1163,30 @@ mod tests {
         let stored = StoredSettings::default();
         let summary = build_summary(&stored);
         let find_cap = |cap: CapId| summary.caps.iter().find(|c| c.cap == cap).unwrap();
+        let provider_ids = |cap: CapId| -> Vec<&str> {
+            find_cap(cap)
+                .configurations
+                .iter()
+                .map(|c| c.provider_id.as_str())
+                .collect()
+        };
+
+        // 文字改写、图片识别、视频识别三个槽位均默认保留 DeepSeek / 智谱 / 通义千问 三家且均为未配置状态
+        for cap in [CapId::Text, CapId::VisionImg, CapId::VisionVideo] {
+            assert_eq!(provider_ids(cap), vec!["deepseek", "zhipu", "qwen"]);
+            assert!(!find_cap(cap).configured);
+        }
         assert_eq!(find_cap(CapId::Text).provider, "deepseek");
-        assert_eq!(find_cap(CapId::Text).model, "deepseek-chat");
-        assert!(!find_cap(CapId::Text).configured);
         assert_eq!(find_cap(CapId::VisionImg).provider, "zhipu");
-        assert_eq!(find_cap(CapId::VisionImg).model, "glm-4v-flash");
-        assert!(!find_cap(CapId::VisionImg).configured);
         assert_eq!(find_cap(CapId::VisionVideo).provider, "qwen");
-        assert_eq!(find_cap(CapId::VisionVideo).model, "qwen-vl-max");
-        assert!(!find_cap(CapId::VisionVideo).configured);
+
+        // 图片生成默认 SudoCode 且未配置
         assert_eq!(find_cap(CapId::Image).provider, "sudocode");
         assert_eq!(find_cap(CapId::Image).model, "gpt-image-2");
         assert!(!find_cap(CapId::Image).configured);
+        assert!(ProviderProtocol::OpenaiResponses.supports_cap(CapId::Image));
+        assert!(ProviderProtocol::AnthropicMessages.supports_cap(CapId::Image));
+        assert!(ProviderProtocol::GeminiNative.supports_cap(CapId::Image));
     }
 
     #[test]

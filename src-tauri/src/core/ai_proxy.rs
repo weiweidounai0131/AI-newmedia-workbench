@@ -210,6 +210,17 @@ fn endpoint(base_url: &str, suffix: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), suffix)
 }
 
+fn gemini_endpoint(base_url: &str, suffix: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/v1beta") || trimmed.ends_with("/v1alpha") {
+        format!("{trimmed}{suffix}")
+    } else if let Some(stripped) = trimmed.strip_suffix("/v1") {
+        format!("{stripped}/v1beta{suffix}")
+    } else {
+        format!("{trimmed}/v1beta{suffix}")
+    }
+}
+
 fn extract_chat_text(body: &Value) -> String {
     let content = &body["choices"][0]["message"]["content"];
     if let Some(s) = content.as_str() {
@@ -301,14 +312,24 @@ pub async fn fetch_provider_models(
         .ok_or_else(|| "请先填写 API Key；也可手工添加模型 ID".to_string())?;
 
     let client = build_http_client_for(&base_url, 20)?;
-    let url = endpoint(&base_url, "/models");
-    let mut req = client.get(&url);
-    if proto == ProviderProtocol::AnthropicMessages {
-        req = req
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01");
+    let url = if proto == ProviderProtocol::GeminiNative {
+        gemini_endpoint(&base_url, "/models")
     } else {
-        req = req.bearer_auth(&api_key);
+        endpoint(&base_url, "/models")
+    };
+    let mut req = client.get(&url);
+    match proto {
+        ProviderProtocol::AnthropicMessages => {
+            req = req
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        ProviderProtocol::GeminiNative => {
+            req = req.header("x-goog-api-key", &api_key);
+        }
+        _ => {
+            req = req.bearer_auth(&api_key);
+        }
     }
 
     let resp = req
@@ -329,6 +350,17 @@ pub async fn fetch_provider_models(
         for item in arr {
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let t = id.trim();
+                if !t.is_empty() && seen.insert(t.to_string()) {
+                    models.push(t.to_string());
+                }
+            }
+        }
+    }
+    // 兼容 Google Gemini /v1beta/models 返回的 models[].name（去掉 models/ 前缀）
+    if let Some(arr) = body.get("models").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                let t = name.trim().trim_start_matches("models/");
                 if !t.is_empty() && seen.insert(t.to_string()) {
                     models.push(t.to_string());
                 }
@@ -405,6 +437,9 @@ async fn call_text_with_snapshot(
                 .send()
                 .await
         }
+        ProviderProtocol::GeminiNative => {
+            return Err("Google Gemini 原生协议仅用于图片生成槽位".into());
+        }
     }
     .map_err(|e| format!("AI 请求失败，请检查网络或代理设置：{e}"))?;
 
@@ -423,6 +458,7 @@ async fn call_text_with_snapshot(
         ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
         ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
         ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+        ProviderProtocol::GeminiNative => String::new(),
     };
     if text.trim().is_empty() {
         return Err("上游返回空内容".into());
@@ -470,6 +506,7 @@ fn extract_sse_delta(protocol: ProviderProtocol, data_str: &str) -> Option<Strin
                 None
             }
         }
+        ProviderProtocol::GeminiNative => None,
     }
 }
 
@@ -549,6 +586,9 @@ pub async fn generate_text_stream(
                 .send()
                 .await
         }
+        ProviderProtocol::GeminiNative => {
+            return Err("Google Gemini 原生协议仅用于图片生成槽位".into());
+        }
     }
     .map_err(|e| format!("AI 流式请求失败，请检查网络或代理设置：{e}"))?;
 
@@ -576,6 +616,7 @@ pub async fn generate_text_stream(
             ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
             ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
             ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+            ProviderProtocol::GeminiNative => String::new(),
         };
         if text.trim().is_empty() {
             return Err("上游返回空内容".into());
@@ -639,6 +680,7 @@ pub async fn generate_text_stream(
                 ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
                 ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
                 ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+                ProviderProtocol::GeminiNative => String::new(),
             };
         }
     }
@@ -795,6 +837,9 @@ pub async fn recognize_media(
                 .send()
                 .await
         }
+        ProviderProtocol::GeminiNative => {
+            return Err("Google Gemini 原生协议仅用于图片生成槽位".into());
+        }
     }
     .map_err(|e| {
         crate::core::logger::error("ai_proxy", format!("recognize_media transport error: {e}"));
@@ -812,6 +857,7 @@ pub async fn recognize_media(
         ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
         ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
         ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+        ProviderProtocol::GeminiNative => String::new(),
     };
     if text.trim().is_empty() {
         return Err("多模态识别返回空内容".into());
@@ -823,77 +869,39 @@ pub async fn recognize_media(
     })
 }
 
-pub async fn generate_image(
-    prompt: &str,
-    size: Option<&str>,
-    quality: Option<&str>,
-    ref_imgs: &[VisionPart],
-) -> Result<ImageResult, String> {
-    let snapshot = settings::resolve_request(CapId::Image, None)?;
-    if snapshot.provider.protocol != ProviderProtocol::OpenaiChatCompletions {
-        return Err("当前出图槽位仅支持 OpenAI Images 兼容协议".into());
-    }
-    let client = build_http_client_for(&snapshot.provider.base_url, 300)?;
-    let size_val = size.unwrap_or("1024x1536");
-    let quality_val = quality.unwrap_or("auto");
-
-    let (resp, used_edit) = if !ref_imgs.is_empty() {
-        let mut form = Form::new()
-            .text("model", snapshot.model.clone())
-            .text("prompt", prompt.to_string())
-            .text("size", size_val.to_string())
-            .text("quality", quality_val.to_string());
-        for (idx, ref_img) in ref_imgs.iter().take(14).enumerate() {
-            let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
-            let bytes = B64
-                .decode(raw_b64)
-                .map_err(|e| format!("第 {} 张参考图解码失败：{e}", idx + 1))?;
-            let mime = ref_img.mime.as_deref().unwrap_or("image/png");
-            let ext = if mime.contains("jpeg") || mime.contains("jpg") {
-                "jpg"
-            } else if mime.contains("webp") {
-                "webp"
-            } else {
-                "png"
-            };
-            let part = Part::bytes(bytes)
-                .file_name(format!("reference-{}.{ext}", idx + 1))
-                .mime_str(mime)
-                .map_err(|e| e.to_string())?;
-            form = form.part("image", part);
+/// 从对话/多模态响应文本中提取内嵌 Base64 data:image 或 Markdown 图片直链并下载为 Base64
+async fn extract_images_from_text(client: &Client, text: &str) -> Vec<ImageOutput> {
+    let mut images = Vec::new();
+    if let Ok(re_data) = regex::Regex::new(r"data:image/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\r\n]+)") {
+        for cap in re_data.captures_iter(text) {
+            let b64: String = cap[1].chars().filter(|c| !c.is_whitespace()).collect();
+            if b64.len() > 200 {
+                images.push(ImageOutput { b64 });
+            }
         }
-        let r = client
-            .post(endpoint(&snapshot.provider.base_url, "/images/edits"))
-            .bearer_auth(&snapshot.api_key)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| format!("参考图编辑出图失败：{e}"))?;
-        (r, true)
-    } else {
-        let r = client
-            .post(endpoint(&snapshot.provider.base_url, "/images/generations"))
-            .bearer_auth(&snapshot.api_key)
-            .json(&json!({
-                "model": snapshot.model,
-                "prompt": prompt,
-                "size": size_val,
-                "quality": quality_val,
-                "n": 1
-            }))
-            .send()
-            .await
-            .map_err(|e| format!("API 出图请求失败：{e}"))?;
-        (r, false)
-    };
-
-    if !resp.status().is_success() {
-        return Err(
-            log_and_map_http_error(resp, Some(CapId::Image), &snapshot.model, snapshot.provider.protocol)
-                .await,
-        );
     }
-    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !images.is_empty() {
+        return images;
+    }
+    if let Ok(re_md) = regex::Regex::new(r"!\[[^\]]*\]\((https?://[^)\s]+)\)") {
+        for cap in re_md.captures_iter(text) {
+            if let Ok(resp) = client.get(&cap[1]).send().await {
+                if resp.status().is_success() {
+                    if let Ok(bytes) = resp.bytes().await {
+                        if !bytes.is_empty() {
+                            images.push(ImageOutput {
+                                b64: B64.encode(&bytes),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    images
+}
+
+async fn extract_images_from_openai_data(client: &Client, body: &Value) -> Vec<ImageOutput> {
     let mut images = Vec::new();
     if let Some(arr) = body.get("data").and_then(|v| v.as_array()) {
         for item in arr {
@@ -901,25 +909,349 @@ pub async fn generate_image(
                 images.push(ImageOutput { b64: b64.to_string() });
             } else if let Some(url) = item.get("url").and_then(|v| v.as_str()) {
                 if let Ok(img_resp) = client.get(url).send().await {
-                    if let Ok(bytes) = img_resp.bytes().await {
-                        images.push(ImageOutput {
-                            b64: B64.encode(&bytes),
-                        });
+                    if img_resp.status().is_success() {
+                        if let Ok(bytes) = img_resp.bytes().await {
+                            if !bytes.is_empty() {
+                                images.push(ImageOutput {
+                                    b64: B64.encode(&bytes),
+                                });
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    if images.is_empty() {
-        return Err("上游未返回可用图片数据".into());
-    }
+    images
+}
 
-    Ok(ImageResult {
-        images,
-        model: snapshot.model,
-        used_edit,
-        provider: "api".to_string(),
-    })
+pub async fn generate_image(
+    prompt: &str,
+    size: Option<&str>,
+    quality: Option<&str>,
+    ref_imgs: &[VisionPart],
+) -> Result<ImageResult, String> {
+    let snapshot = settings::resolve_request(CapId::Image, None)?;
+    let client = build_http_client_for(&snapshot.provider.base_url, 300)?;
+    let size_val = size.unwrap_or("1024x1536");
+    let quality_val = quality.unwrap_or("auto");
+    let used_edit = !ref_imgs.is_empty();
+
+    match snapshot.provider.protocol {
+        ProviderProtocol::OpenaiChatCompletions => {
+            // 优先走标准 OpenAI Images（/images/generations & /images/edits）
+            let resp = if used_edit {
+                let mut form = Form::new()
+                    .text("model", snapshot.model.clone())
+                    .text("prompt", prompt.to_string())
+                    .text("size", size_val.to_string())
+                    .text("quality", quality_val.to_string());
+                for (idx, ref_img) in ref_imgs.iter().take(14).enumerate() {
+                    let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
+                    let bytes = B64
+                        .decode(raw_b64)
+                        .map_err(|e| format!("第 {} 张参考图解码失败：{e}", idx + 1))?;
+                    let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+                    let ext = if mime.contains("jpeg") || mime.contains("jpg") {
+                        "jpg"
+                    } else if mime.contains("webp") {
+                        "webp"
+                    } else {
+                        "png"
+                    };
+                    let part = Part::bytes(bytes)
+                        .file_name(format!("reference-{}.{ext}", idx + 1))
+                        .mime_str(mime)
+                        .map_err(|e| e.to_string())?;
+                    form = form.part("image", part);
+                }
+                client
+                    .post(endpoint(&snapshot.provider.base_url, "/images/edits"))
+                    .bearer_auth(&snapshot.api_key)
+                    .multipart(form)
+                    .send()
+                    .await
+                    .map_err(|e| format!("参考图编辑出图失败：{e}"))?
+            } else {
+                client
+                    .post(endpoint(&snapshot.provider.base_url, "/images/generations"))
+                    .bearer_auth(&snapshot.api_key)
+                    .json(&json!({
+                        "model": snapshot.model,
+                        "prompt": prompt,
+                        "size": size_val,
+                        "quality": quality_val,
+                        "n": 1
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| format!("API 出图请求失败：{e}"))?
+            };
+
+            if resp.status().is_success() {
+                let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+                let images = extract_images_from_openai_data(&client, &body).await;
+                if !images.is_empty() {
+                    return Ok(ImageResult {
+                        images,
+                        model: snapshot.model,
+                        used_edit,
+                        provider: "api".to_string(),
+                    });
+                }
+            } else {
+                let status = resp.status().as_u16();
+                let first_err = log_and_map_http_error(
+                    resp,
+                    Some(CapId::Image),
+                    &snapshot.model,
+                    snapshot.provider.protocol,
+                )
+                .await;
+                // 若中转站不支持 /images/* 端点（常见于 404/405/400 的对话式生图模型），自动兜底尝试 /chat/completions 生图
+                if !matches!(status, 400 | 404 | 405 | 422) {
+                    return Err(first_err);
+                }
+                crate::core::logger::info(
+                    "ai_proxy",
+                    format!("images endpoint returned HTTP {status}, falling back to /chat/completions for model={}", snapshot.model),
+                );
+                let mut content = vec![json!({
+                    "type": "text",
+                    "text": format!("请直接生成图片（尺寸 {size_val}，画质 {quality_val}）：\n{prompt}")
+                })];
+                for ref_img in ref_imgs.iter().take(6) {
+                    let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+                    let data_url = if ref_img.data.starts_with("data:") {
+                        ref_img.data.clone()
+                    } else {
+                        format!("data:{mime};base64,{}", ref_img.data)
+                    };
+                    content.push(json!({ "type": "image_url", "image_url": { "url": data_url } }));
+                }
+                let chat_resp = client
+                    .post(endpoint(&snapshot.provider.base_url, "/chat/completions"))
+                    .bearer_auth(&snapshot.api_key)
+                    .json(&json!({
+                        "model": snapshot.model,
+                        "messages": [{ "role": "user", "content": content }]
+                    }))
+                    .send()
+                    .await
+                    .map_err(|_| first_err.clone())?;
+                if !chat_resp.status().is_success() {
+                    return Err(first_err);
+                }
+                let chat_body: Value = chat_resp.json().await.map_err(|_| first_err.clone())?;
+                let mut images = Vec::new();
+                if let Some(arr) = chat_body.pointer("/choices/0/message/images").and_then(|v| v.as_array()) {
+                    for item in arr {
+                        if let Some(url) = item.pointer("/image_url/url").and_then(|v| v.as_str()) {
+                            images.extend(extract_images_from_text(&client, url).await);
+                        }
+                    }
+                }
+                if images.is_empty() {
+                    let text = extract_chat_text(&chat_body);
+                    images = extract_images_from_text(&client, &text).await;
+                }
+                if images.is_empty() {
+                    return Err(first_err);
+                }
+                return Ok(ImageResult {
+                    images,
+                    model: snapshot.model,
+                    used_edit,
+                    provider: "api".to_string(),
+                });
+            }
+
+            Err("上游未返回可用图片数据".into())
+        }
+
+        ProviderProtocol::OpenaiResponses => {
+            let mut input_content = vec![json!({
+                "type": "input_text",
+                "text": format!("请根据以下要求生成成品图片（尺寸 {size_val}，画质 {quality_val}）：\n{prompt}")
+            })];
+            for ref_img in ref_imgs.iter().take(6) {
+                let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+                let data_url = if ref_img.data.starts_with("data:") {
+                    ref_img.data.clone()
+                } else {
+                    format!("data:{mime};base64,{}", ref_img.data)
+                };
+                input_content.push(json!({ "type": "input_image", "image_url": data_url }));
+            }
+            let payload = json!({
+                "model": snapshot.model,
+                "input": [{ "role": "user", "content": input_content }],
+                "tools": [{
+                    "type": "image_generation",
+                    "size": size_val,
+                    "quality": quality_val
+                }]
+            });
+            let resp = client
+                .post(endpoint(&snapshot.provider.base_url, "/responses"))
+                .bearer_auth(&snapshot.api_key)
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|e| format!("Responses 出图请求失败：{e}"))?;
+            if !resp.status().is_success() {
+                return Err(
+                    log_and_map_http_error(resp, Some(CapId::Image), &snapshot.model, snapshot.provider.protocol)
+                        .await,
+                );
+            }
+            let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+            let mut images = Vec::new();
+            if let Some(arr) = body.get("output").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if item.get("type").and_then(|v| v.as_str()) == Some("image_generation_call") {
+                        if let Some(b64) = item.get("result").and_then(|v| v.as_str()) {
+                            if !b64.trim().is_empty() {
+                                images.push(ImageOutput { b64: b64.trim().to_string() });
+                            }
+                        }
+                    }
+                }
+            }
+            if images.is_empty() {
+                let text = extract_responses_text(&body);
+                images = extract_images_from_text(&client, &text).await;
+            }
+            if images.is_empty() {
+                return Err("Responses 上游未返回可用图片数据".into());
+            }
+            Ok(ImageResult {
+                images,
+                model: snapshot.model,
+                used_edit,
+                provider: "api".to_string(),
+            })
+        }
+
+        ProviderProtocol::AnthropicMessages => {
+            let mut content = Vec::new();
+            for ref_img in ref_imgs.iter().take(6) {
+                let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+                let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
+                content.push(json!({
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": mime, "data": raw_b64 }
+                }));
+            }
+            content.push(json!({
+                "type": "text",
+                "text": format!("请直接生成图片（尺寸 {size_val}，画质 {quality_val}）：\n{prompt}")
+            }));
+            let resp = client
+                .post(endpoint(&snapshot.provider.base_url, "/messages"))
+                .header("x-api-key", &snapshot.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&json!({
+                    "model": snapshot.model,
+                    "max_tokens": 4096,
+                    "messages": [{ "role": "user", "content": content }]
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Anthropic 协议出图请求失败：{e}"))?;
+            if !resp.status().is_success() {
+                return Err(
+                    log_and_map_http_error(resp, Some(CapId::Image), &snapshot.model, snapshot.provider.protocol)
+                        .await,
+                );
+            }
+            let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+            let text = extract_anthropic_text(&body);
+            let images = extract_images_from_text(&client, &text).await;
+            if images.is_empty() {
+                return Err("当前 Anthropic 协议上游未返回可用图片数据，请确认该模型支持图像生成".into());
+            }
+            Ok(ImageResult {
+                images,
+                model: snapshot.model,
+                used_edit,
+                provider: "api".to_string(),
+            })
+        }
+
+        ProviderProtocol::GeminiNative => {
+            let mut parts = vec![json!({
+                "text": format!("请严格按以下要求生成成品图片（推荐画幅 {size_val}）：\n{prompt}")
+            })];
+            for ref_img in ref_imgs.iter().take(6) {
+                let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+                let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
+                parts.push(json!({
+                    "inlineData": { "mimeType": mime, "data": raw_b64 }
+                }));
+            }
+            let aspect = match size_val {
+                "1024x1024" => Some("1:1"),
+                "1536x1024" => Some("3:2"),
+                "1024x1536" => Some("2:3"),
+                _ => None,
+            };
+            let mut gen_cfg = json!({
+                "responseModalities": ["TEXT", "IMAGE"]
+            });
+            if let Some(ar) = aspect {
+                gen_cfg["imageConfig"] = json!({ "aspectRatio": ar });
+            }
+            let url = gemini_endpoint(
+                &snapshot.provider.base_url,
+                &format!("/models/{}:generateContent", snapshot.model),
+            );
+            let resp = client
+                .post(&url)
+                .header("x-goog-api-key", &snapshot.api_key)
+                .json(&json!({
+                    "contents": [{ "role": "user", "parts": parts }],
+                    "generationConfig": gen_cfg
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Google Gemini 出图请求失败：{e}"))?;
+            if !resp.status().is_success() {
+                return Err(
+                    log_and_map_http_error(resp, Some(CapId::Image), &snapshot.model, snapshot.provider.protocol)
+                        .await,
+                );
+            }
+            let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+            let mut images = Vec::new();
+            if let Some(cands) = body.get("candidates").and_then(|v| v.as_array()) {
+                for cand in cands {
+                    if let Some(p_arr) = cand.pointer("/content/parts").and_then(|v| v.as_array()) {
+                        for p in p_arr {
+                            if let Some(b64) = p
+                                .pointer("/inlineData/data")
+                                .or_else(|| p.pointer("/inline_data/data"))
+                                .and_then(|v| v.as_str())
+                            {
+                                if !b64.trim().is_empty() {
+                                    images.push(ImageOutput { b64: b64.trim().to_string() });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if images.is_empty() {
+                return Err("Google Gemini 上游未返回图片数据（可能触发安全过滤或模型不支持生图）".into());
+            }
+            Ok(ImageResult {
+                images,
+                model: snapshot.model,
+                used_edit,
+                provider: "api".to_string(),
+            })
+        }
+    }
 }
 
 fn enriched_child_path() -> String {
