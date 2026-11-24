@@ -180,6 +180,7 @@ async fn run_xhs_task(app: AppHandle, task_id: String, raw_link: String) {
             .map_err(|e| format!("写入文案.txt 失败：{e}"))?;
 
         let client = Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(40))
             .build()
             .map_err(|e| e.to_string())?;

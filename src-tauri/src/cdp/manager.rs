@@ -893,6 +893,138 @@ pub async fn fetch_initial_state_via_cdp(
     Err("未在页面中获取到内容数据，可能登录已过期或链接受风控保护".into())
 }
 
+/// 通过已登录的抖音 CDP 会话打开视频页，拦截官方前端自带签名的 /aweme/detail/ JSON 或直接从 <video> 提取无水印直链
+pub async fn fetch_douyin_video_detail_via_cdp(aweme_id: &str) -> Result<(String, String), String> {
+    let url = format!("https://www.douyin.com/video/{aweme_id}");
+    crate::core::logger::info("cdp:douyin", format!("fetch_douyin_video_detail_via_cdp aweme_id={aweme_id}"));
+    let session = ensure_session(PlatformKey::Douyin).await?;
+    let mut rx = session.subscribe();
+    session.navigate(&url).await?;
+
+    let mut watched_reqs: HashMap<String, String> = HashMap::new();
+    let deadline = Instant::now() + Duration::from_secs(14);
+
+    while Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(450), rx.recv()).await {
+            Ok(Ok(ev)) if ev.method == "Network.responseReceived" => {
+                let u = ev
+                    .params
+                    .get("response")
+                    .and_then(|r| r.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if u.contains("/aweme/v1/web/aweme/detail/") || u.contains("/aweme/v1/web/multi/aweme/detail/") {
+                    if let Some(req_id) = ev.params.get("requestId").and_then(|v| v.as_str()) {
+                        watched_reqs.insert(req_id.to_string(), u.to_string());
+                    }
+                }
+            }
+            Ok(Ok(ev)) if ev.method == "Network.loadingFinished" => {
+                let Some(req_id) = ev.params.get("requestId").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if watched_reqs.remove(req_id).is_some() {
+                    if let Ok(body_str) = session.get_response_body(req_id).await {
+                        if let Ok(val) = serde_json::from_str::<Value>(&body_str) {
+                            let detail = val
+                                .get("aweme_detail")
+                                .or_else(|| val.pointer("/aweme_details/0"));
+                            if let Some(d) = detail {
+                                if let Some(pair) = extract_douyin_title_and_video_url(d) {
+                                    crate::core::logger::info("cdp:douyin", "captured video url via CDP detail API");
+                                    return Ok(pair);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // DOM 兜底：直接从已渲染的 <video>/<source> 读取播放直链与标题
+    if let Ok(val) = session
+        .eval_json(
+            r#"(() => {
+              const v = document.querySelector('video');
+              let src = '';
+              if (v) {
+                src = v.currentSrc || v.src || '';
+                if (!src || src.startsWith('blob:')) {
+                  const sources = [...v.querySelectorAll('source')].map(s => s.src).filter(u => u && u.startsWith('http'));
+                  if (sources.length) src = sources[0];
+                }
+              }
+              const desc = document.querySelector('[data-e2e="video-desc"]')?.textContent?.trim()
+                || document.querySelector('h1')?.textContent?.trim()
+                || document.title.replace(/\s*-\s*抖音.*$/, '').trim()
+                || '抖音视频';
+              return { title: desc, url: src };
+            })()"#,
+        )
+        .await
+    {
+        let u = val.get("url").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let t = val.get("title").and_then(|v| v.as_str()).unwrap_or("抖音视频").trim();
+        if u.starts_with("http") {
+            let clean = u.replace("watermark=1", "watermark=0").replace("playwm", "play");
+            crate::core::logger::info("cdp:douyin", "captured video url via CDP <video> DOM fallback");
+            return Ok((if t.is_empty() { "抖音视频" } else { t }.to_string(), clean));
+        }
+    }
+
+    Err("未能通过浏览器会话获取到抖音视频直链，可能视频受限或触发验证".into())
+}
+
+pub fn extract_douyin_title_and_video_url(detail: &Value) -> Option<(String, String)> {
+    let title = detail
+        .get("desc")
+        .or_else(|| detail.get("item_title"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("抖音视频")
+        .to_string();
+
+    let mut candidates: Vec<&str> = Vec::new();
+    if let Some(arr) = detail.pointer("/video/bit_rate").and_then(|v| v.as_array()) {
+        for br in arr {
+            if let Some(urls) = br.pointer("/play_addr/url_list").and_then(|v| v.as_array()) {
+                for u in urls.iter().filter_map(|v| v.as_str()) {
+                    if u.starts_with("http") {
+                        candidates.push(u);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(urls) = detail.pointer("/video/play_addr/url_list").and_then(|v| v.as_array()) {
+        for u in urls.iter().filter_map(|v| v.as_str()) {
+            if u.starts_with("http") {
+                candidates.push(u);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // 优先无水印直链，其次清洗 playwm / watermark=1
+    let chosen = candidates
+        .iter()
+        .copied()
+        .find(|u| {
+            let l = u.to_lowercase();
+            !l.contains("watermark=1") && !l.contains("playwm")
+        })
+        .unwrap_or(candidates[0]);
+    let clean = chosen
+        .replace("watermark=1", "watermark=0")
+        .replace("playwm", "play");
+    Some((title, clean))
+}
+
 /// 仅在用户主动触发（如遇到抖音 verify_check 滑块验证）时，用有头可见窗口复用同一隔离 Profile 打开搜索页完成一次人机验证
 pub async fn open_verify_window(platform_name: &str, keyword: Option<&str>) -> Result<(), String> {
     let platform = PlatformKey::from_name(platform_name)

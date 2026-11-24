@@ -110,61 +110,92 @@ async fn resolve_aweme_id(client: &Client, link: &str) -> Result<String, String>
     Err("未能从该抖音链接中识别视频 ID，请粘贴完整视频分享链接".into())
 }
 
-async fn fetch_video_meta_api(
+async fn try_douyin_json_api(
+    client: &Client,
+    url: &str,
+    referer: &str,
+    cookie_header: Option<&str>,
+    label: &str,
+) -> Option<Value> {
+    let mut req = client
+        .get(url)
+        .header("User-Agent", DOUYIN_UA)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Accept-Language", "zh-CN,zh;q=0.9")
+        .header("Referer", referer);
+    if let Some(ck) = cookie_header {
+        req = req.header("Cookie", ck);
+    }
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            crate::core::logger::warn("download:douyin", format!("{label} request error: {e}"));
+            return None;
+        }
+    };
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    crate::core::logger::info("download:douyin", format!("{label} status={status} body_len={}", text.len()));
+    if status != 200 || text.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str::<Value>(&text).ok()
+}
+
+async fn fetch_video_meta_with_fallback(
     client: &Client,
     aweme_id: &str,
     cookie_header: Option<&str>,
 ) -> Result<(String, String), String> {
-    let query_params = format!(
-        "aweme_id={aweme_id}&device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=190500&version_name=19.5.0&cookie_enabled=true&platform=PC"
-    );
-    let a_bogus = sign_detail(&query_params, DOUYIN_UA);
-    let encoded_ab: String = url::form_urlencoded::byte_serialize(a_bogus.as_bytes()).collect();
-    let url = format!(
-        "https://www.douyin.com/aweme/v1/web/aweme/detail/?{query_params}&a_bogus={encoded_ab}"
+    let referer = format!("https://www.douyin.com/video/{aweme_id}");
+    let base_params = format!(
+        "aweme_id={aweme_id}&aid=6383&version_name=23.5.0&device_platform=webapp&os=windows"
     );
 
-    let mut req = client
-        .get(&url)
-        .header("User-Agent", DOUYIN_UA)
-        .header("Referer", format!("https://www.douyin.com/video/{aweme_id}"));
-    if let Some(ck) = cookie_header {
-        req = req.header("Cookie", ck);
+    // 1. 无签名直查 detail（对齐 wechat-mp-tools unsigned-first 策略）
+    let unsigned_url = format!("https://www.douyin.com/aweme/v1/web/aweme/detail/?{base_params}");
+    if let Some(body) = try_douyin_json_api(client, &unsigned_url, &referer, cookie_header, "detail_unsigned").await {
+        if let Some(detail) = body.get("aweme_detail") {
+            if let Some(pair) = cdp_manager::extract_douyin_title_and_video_url(detail) {
+                return Ok(pair);
+            }
+        }
     }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("请求抖音详情接口失败：{e}"))?;
-    let body: Value = resp
-        .json()
-        .await
-        .map_err(|_| "抖音接口未返回有效 JSON（可能触发风控或需要登录）".to_string())?;
 
-    let detail = body
-        .get("aweme_detail")
-        .ok_or_else(|| "抖音详情为空，请在设置页完成抖音扫码登录后重试".to_string())?;
-    let title = detail
-        .get("desc")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("抖音视频")
-        .to_string();
+    // 2. 带 Rust 原生 a_bogus 签名查 detail
+    let a_bogus = sign_detail(&base_params, DOUYIN_UA);
+    let encoded_ab: String = url::form_urlencoded::byte_serialize(a_bogus.as_bytes()).collect();
+    let signed_url = format!(
+        "https://www.douyin.com/aweme/v1/web/aweme/detail/?{base_params}&a_bogus={encoded_ab}"
+    );
+    if let Some(body) = try_douyin_json_api(client, &signed_url, &referer, cookie_header, "detail_signed").await {
+        if let Some(detail) = body.get("aweme_detail") {
+            if let Some(pair) = cdp_manager::extract_douyin_title_and_video_url(detail) {
+                return Ok(pair);
+            }
+        }
+    }
 
-    let url_list = detail
-        .pointer("/video/play_addr/url_list")
-        .or_else(|| detail.pointer("/video/bit_rate/0/play_addr/url_list"))
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "未找到可下载的无水印视频流地址".to_string())?;
+    // 3. multi/aweme/detail 兜底
+    let multi_url = format!(
+        "https://www.douyin.com/aweme/v1/web/multi/aweme/detail/?aweme_ids=%5B{aweme_id}%5D&request_source=200"
+    );
+    if let Some(body) = try_douyin_json_api(client, &multi_url, &referer, cookie_header, "multi_detail").await {
+        if let Some(arr) = body.get("aweme_details").and_then(|v| v.as_array()) {
+            let hit = arr
+                .iter()
+                .find(|d| d.get("aweme_id").and_then(|v| v.as_str()) == Some(aweme_id))
+                .or_else(|| arr.first());
+            if let Some(detail) = hit {
+                if let Some(pair) = cdp_manager::extract_douyin_title_and_video_url(detail) {
+                    return Ok(pair);
+                }
+            }
+        }
+    }
 
-    let video_url = url_list
-        .iter()
-        .filter_map(|v| v.as_str())
-        .find(|u| u.starts_with("http"))
-        .map(|u| u.replace("playwm", "play"))
-        .ok_or_else(|| "视频直链列表为空".to_string())?;
-
-    Ok((title, video_url))
+    // 4. 终极兜底：通过已登录的真实浏览器 CDP 会话拦截官方前端 detail API / <video> 直链
+    cdp_manager::fetch_douyin_video_detail_via_cdp(aweme_id).await
 }
 
 async fn run_douyin_task(app: AppHandle, task_id: String, raw_link: String) {
@@ -174,17 +205,19 @@ async fn run_douyin_task(app: AppHandle, task_id: String, raw_link: String) {
 
         update_task(&app, &task_id, "running", 12.0, "正在解析抖音链接与视频 ID…".into(), None, None);
 
+        // 抖音接口与视频 CDN 固定国内直连，绝不走系统外网代理
         let client = Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(90))
             .redirect(reqwest::redirect::Policy::limited(8))
             .build()
             .map_err(|e| e.to_string())?;
 
         let aweme_id = resolve_aweme_id(&client, &link).await?;
-        update_task(&app, &task_id, "running", 28.0, "正在通过 Rust 原生 a_bogus 签名获取无水印视频直链…".into(), None, None);
+        update_task(&app, &task_id, "running", 28.0, "正在解析无水印视频直链…".into(), None, None);
 
         let cookie = cdp_manager::get_cookie_header(PlatformKey::Douyin).await.ok();
-        let (title, video_url) = fetch_video_meta_api(&client, &aweme_id, cookie.as_deref()).await?;
+        let (title, video_url) = fetch_video_meta_with_fallback(&client, &aweme_id, cookie.as_deref()).await?;
 
         update_task(&app, &task_id, "running", 45.0, format!("已解析《{}》，正在流式下载无水印视频…", title.chars().take(24).collect::<String>()), None, None);
 
