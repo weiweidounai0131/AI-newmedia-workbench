@@ -154,14 +154,13 @@ export default function Settings() {
       .getSettings()
       .then(setSettings)
       .catch(() => toast('读取设置失败，请确认后端已启动', 'danger'));
-  }, [toast]);
+  }, []);
 
   useEffect(() => {
     let active = true;
     const refresh = () => api.runtimeStatus().then((value) => { if (active) { setRuntime(value); setRuntimeInstalling(value.installing); } }).catch(() => {});
     void refresh();
-    const timer = window.setInterval(refresh, 2_000);
-    return () => { active = false; window.clearInterval(timer); };
+    return () => { active = false; };
   }, []);
 
   async function installRuntime() {
@@ -255,7 +254,7 @@ export default function Settings() {
     invalidateModelDiscovery();
     setProviderDraft({
       mode: 'edit',
-      ...(provider.scopeCap === cap && !provider.builtin ? { id: provider.id } : {}),
+      id: provider.id,
       cap,
       sourceProviderId: provider.id,
       sourceModel: config.model,
@@ -389,11 +388,12 @@ export default function Settings() {
     }
   }
 
-  async function verify(cap: CapId) {
-    if (verifying[cap]) return;
-    setVerifying((s) => ({ ...s, [cap]: true }));
+  async function verify(cap: CapId, providerId?: string, model?: string) {
+    const key = providerId && model ? `${cap}::${providerId}::${model}` : cap;
+    if (verifying[key]) return;
+    setVerifying((s) => ({ ...s, [key]: true }));
     try {
-      const r = await api.verifyCap(cap);
+      const r = await api.verifyCap(cap, providerId, model);
       if (r.settings) {
         setSettings(r.settings);
       } else {
@@ -407,7 +407,7 @@ export default function Settings() {
     } catch (e: any) {
       toast(e?.message || '验证失败', 'danger');
     } finally {
-      setVerifying((s) => ({ ...s, [cap]: false }));
+      setVerifying((s) => ({ ...s, [key]: false }));
     }
   }
 
@@ -530,18 +530,22 @@ export default function Settings() {
                         </label>
                         <div className="capability-config-status">
                           <span className={`ai-model-status ${configStatus(config) === '未配置' ? 'empty' : (config.verified || config.editable === false) ? 'verified' : 'saved'}`}>{configStatus(config)}</span>
-                          {config.active && config.editable !== false && config.providerId !== 'codex-cli' && (
-                            <Button
-                              key={verifying[configModalCap] ? 'verifying' : 'idle'}
-                              size="sm"
-                              variant="bordered"
-                              isLoading={Boolean(verifying[configModalCap])}
-                              isDisabled={!config.configured || Boolean(verifying[configModalCap])}
-                              onPress={() => void verify(configModalCap)}
-                            >
-                              {verifying[configModalCap] ? '验证中' : '验证'}
-                            </Button>
-                          )}
+                          {config.configured && config.editable !== false && config.providerId !== 'codex-cli' && (() => {
+                            const vKey = `${configModalCap}::${config.providerId}::${config.model}`;
+                            const busy = Boolean(verifying[vKey]);
+                            return (
+                              <Button
+                                key={busy ? `${vKey}:busy` : `${vKey}:idle`}
+                                size="sm"
+                                variant="bordered"
+                                isLoading={busy}
+                                isDisabled={busy}
+                                onPress={() => void verify(configModalCap, config.providerId, config.model)}
+                              >
+                                {busy ? '验证中' : '验证'}
+                              </Button>
+                            );
+                          })()}
                         </div>
                         <div className="capability-config-actions">
                           {config.editable !== false && config.providerId !== 'codex-cli' && (

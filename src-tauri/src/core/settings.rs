@@ -78,6 +78,8 @@ pub struct StoredSettings {
     #[serde(default)]
     pub verified: HashMap<CapId, VerificationStamp>,
     #[serde(default)]
+    pub verified_configs: HashMap<String, VerificationStamp>,
+    #[serde(default)]
     pub root_dir: Option<String>,
     #[serde(default)]
     pub xhs_download_dir: Option<String>,
@@ -531,18 +533,22 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
             };
             let active = entry.provider_id == active_pid && entry.model == active_model;
             let key_ver = *stored.key_versions.get(&p.key_id).unwrap_or(&0);
+            let cfg_key = verified_config_key(cap, &p.id, &entry.model);
+            let stamp_matches = |s: &VerificationStamp| {
+                s.provider_id == p.id
+                    && s.model == entry.model
+                    && s.provider_revision == p.revision
+                    && s.key_version == key_ver
+            };
             let verified = if is_codex {
                 true
             } else {
-                active
-                    && stamp
-                        .map(|s| {
-                            s.provider_id == p.id
-                                && s.model == entry.model
-                                && s.provider_revision == p.revision
-                                && s.key_version == key_ver
-                        })
-                        .unwrap_or(false)
+                stored
+                    .verified_configs
+                    .get(&cfg_key)
+                    .map(stamp_matches)
+                    .unwrap_or(false)
+                    || stamp.map(stamp_matches).unwrap_or(false)
             };
             let model_label = p
                 .models
@@ -643,10 +649,27 @@ pub fn get_summary() -> Result<SettingsSummary, String> {
     Ok(build_summary(&stored))
 }
 
+pub fn verified_config_key(cap: CapId, provider_id: &str, model: &str) -> String {
+    format!("{}::{}::{}", cap.as_str(), provider_id, model)
+}
+
 pub fn resolve_request(cap: CapId, model_override: Option<&str>) -> Result<ProviderRequestSnapshot, String> {
+    resolve_request_for(cap, None, model_override)
+}
+
+pub fn resolve_request_for(
+    cap: CapId,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Result<ProviderRequestSnapshot, String> {
     let _g = SETTINGS_LOCK.lock().unwrap();
     let stored = load_stored()?;
-    let (provider_id, active_model) = active_pair(&stored, cap);
+    let (active_pid, active_model) = active_pair(&stored, cap);
+    let provider_id = provider_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(active_pid);
     let provider = provider_by_id(&stored, &provider_id)
         .ok_or_else(|| format!("未找到能力「{}」对应的供应商配置", cap.label()))?;
     if !provider.protocol.supports_cap(cap) {
@@ -738,11 +761,26 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
         return Err("请至少添加一个模型 ID".into());
     }
 
-    let is_create = draft.mode.as_deref() == Some("create") || draft.id.as_deref().unwrap_or("").is_empty();
+    let is_edit = draft.mode.as_deref() == Some("edit");
+    let target_id = if is_edit {
+        draft
+            .id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| draft.source_provider_id.as_deref().filter(|s| !s.trim().is_empty()))
+            .map(|s| s.trim().to_string())
+    } else {
+        draft
+            .id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+    };
+    let is_create = draft.mode.as_deref() == Some("create") || target_id.is_none();
     let id = if is_create {
         format!("custom-{}", &uuid::Uuid::new_v4().to_string()[..8])
     } else {
-        draft.id.clone().unwrap()
+        target_id.unwrap()
     };
     if id == CODEX_CLI_PROVIDER_ID {
         return Err("Codex CLI 为本机自动探测项，仅支持勾选或移除，不能编辑配置".into());
@@ -776,7 +814,7 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
         }
         let mut caps = m.capabilities;
         if caps.is_empty() {
-            if let Some(c) = scope_cap {
+            if let Some(c) = scope_cap.or(draft.cap) {
                 caps.push(c);
             }
         }
@@ -789,6 +827,43 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
     if clean_models.is_empty() {
         return Err("模型 ID 列表不能为空".into());
     }
+
+    // 原地编辑已有供应商（特别是内置供应商如 SudoCode / 智谱 / DeepSeek）时，保留该供应商原有的其他模型，仅更新当前编辑项
+    let final_models: Vec<ProviderModel> = if let Some(prev) = existing.as_ref().filter(|p| p.builtin) {
+        let mut merged = prev.models.clone();
+        if let (Some(src_model), Some(edited_first)) = (
+            draft.source_model.as_deref().filter(|s| !s.trim().is_empty()),
+            clean_models.first(),
+        ) {
+            if src_model != edited_first.id {
+                if let Some(cap) = draft.cap {
+                    if let Some(pos) = merged.iter().position(|m| m.id == src_model) {
+                        merged[pos].capabilities.retain(|c| *c != cap);
+                        if merged[pos].capabilities.is_empty() {
+                            merged.remove(pos);
+                        }
+                    }
+                }
+            }
+        }
+        for cm in &clean_models {
+            if let Some(hit) = merged.iter_mut().find(|m| m.id == cm.id) {
+                for c in &cm.capabilities {
+                    if !hit.capabilities.contains(c) {
+                        hit.capabilities.push(*c);
+                    }
+                }
+                if cm.label.is_some() {
+                    hit.label = cm.label.clone();
+                }
+            } else {
+                merged.push(cm.clone());
+            }
+        }
+        merged
+    } else {
+        clean_models.clone()
+    };
 
     if let Some(key) = draft.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
         validate_key_format(&key_id, key)?;
@@ -805,7 +880,7 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
         key_id: key_id.clone(),
         base_url,
         protocol: draft.protocol,
-        models: clean_models.clone(),
+        models: final_models,
         builtin,
         revision,
         scope_cap,
@@ -821,6 +896,14 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
             }
         }
         let list = stored.capability_configs.entry(cap).or_default();
+        // 原地编辑改了模型 ID 时，同步替换旧条目，避免列表出现重复
+        if is_edit {
+            if let Some(src_model) = draft.source_model.as_deref().filter(|s| !s.trim().is_empty()) {
+                if !clean_models.iter().any(|m| m.id == src_model) {
+                    list.retain(|e| !(e.provider_id == id && e.model == src_model));
+                }
+            }
+        }
         for m in &clean_models {
             if !list.iter().any(|e| e.provider_id == id && e.model == m.id) {
                 list.push(CapConfigEntry {
@@ -833,6 +916,9 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
         if active_p == id {
             stored.verified.remove(&cap);
         }
+        stored
+            .verified_configs
+            .retain(|_, s| s.provider_id != id);
     }
 
     save_stored(&stored)?;
@@ -893,15 +979,18 @@ pub fn delete_capability_config(
 pub fn mark_verified(snapshot: &ProviderRequestSnapshot) -> Result<(), String> {
     let _g = SETTINGS_LOCK.lock().unwrap();
     let mut stored = load_stored()?;
-    stored.verified.insert(
-        snapshot.cap,
-        VerificationStamp {
-            provider_id: snapshot.provider.id.clone(),
-            model: snapshot.model.clone(),
-            provider_revision: snapshot.provider.revision,
-            key_version: snapshot.key_version,
-        },
-    );
+    let stamp = VerificationStamp {
+        provider_id: snapshot.provider.id.clone(),
+        model: snapshot.model.clone(),
+        provider_revision: snapshot.provider.revision,
+        key_version: snapshot.key_version,
+    };
+    let cfg_key = verified_config_key(snapshot.cap, &snapshot.provider.id, &snapshot.model);
+    stored.verified_configs.insert(cfg_key, stamp.clone());
+    let (active_p, active_m) = active_pair(&stored, snapshot.cap);
+    if active_p == snapshot.provider.id && active_m == snapshot.model {
+        stored.verified.insert(snapshot.cap, stamp);
+    }
     save_stored(&stored)
 }
 
@@ -959,5 +1048,46 @@ mod tests {
                 .any(|c| c.provider_id == "deepseek"),
             "removed builtin deepseek models must not reappear"
         );
+    }
+
+    #[test]
+    fn edit_builtin_provider_updates_in_place_without_duplicating() {
+        let mut stored = StoredSettings::default();
+        // 模拟编辑内置 SudoCode (sudocode / gpt-image-2) 保存配置
+        let mut sudocode = builtin_providers()
+            .into_iter()
+            .find(|p| p.id == "sudocode")
+            .unwrap();
+        sudocode.revision += 1;
+        stored.provider_catalog.insert("sudocode".into(), sudocode);
+        stored.keys.insert("sudocode".into(), "aes:dummy".into());
+        stored.key_versions.insert("sudocode".into(), 1);
+        stored.capability_configs.insert(
+            CapId::Image,
+            vec![CapConfigEntry {
+                provider_id: "sudocode".into(),
+                model: "gpt-image-2".into(),
+            }],
+        );
+        // 即使同时验证了非 active 项，验证状态也独立生效
+        stored.verified_configs.insert(
+            verified_config_key(CapId::Image, "sudocode", "gpt-image-2"),
+            VerificationStamp {
+                provider_id: "sudocode".into(),
+                model: "gpt-image-2".into(),
+                provider_revision: 2,
+                key_version: 1,
+            },
+        );
+
+        let summary = build_summary(&stored);
+        let img_cap = summary.caps.iter().find(|c| c.cap == CapId::Image).unwrap();
+        let sudocode_rows: Vec<_> = img_cap
+            .configurations
+            .iter()
+            .filter(|c| c.provider_id == "sudocode" && c.model == "gpt-image-2")
+            .collect();
+        assert_eq!(sudocode_rows.len(), 1, "builtin sudocode must not duplicate");
+        assert!(sudocode_rows[0].verified, "per-config verified stamp must take effect");
     }
 }

@@ -233,7 +233,12 @@ export const api = {
     return { ok: res.ok, xhsDownloadDir: res.settings.xhsDownloadDir, synced: true };
   },
 
-  verifyCap: (cap: CapId) => tauriInvoke<VerifyResp>('verify_capability', { cap }),
+  verifyCap: (cap: CapId, providerId?: string, model?: string) =>
+    tauriInvoke<VerifyResp>('verify_capability', {
+      cap,
+      providerId: providerId || null,
+      model: model || null,
+    }),
 
   // Rust 原生版零 Python 运行时：直接反映本机浏览器引擎探测状态
   runtimeStatus: async (): Promise<RuntimeSetupResp> => {

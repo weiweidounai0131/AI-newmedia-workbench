@@ -1306,15 +1306,22 @@ pub async fn generate_codex_image(
     result
 }
 
-pub async fn verify_capability(cap: CapId) -> Result<String, String> {
-    if cap == CapId::Image && settings::is_active_image_codex_cli() {
+pub async fn verify_capability(
+    cap: CapId,
+    provider_id: Option<&str>,
+    model: Option<&str>,
+) -> Result<String, String> {
+    let is_codex_target = cap == CapId::Image
+        && (provider_id == Some(settings::CODEX_CLI_PROVIDER_ID)
+            || (provider_id.is_none() && settings::is_active_image_codex_cli()));
+    if is_codex_target {
         let status = chutu_providers_status().await;
         if status.codex.available {
             return Ok("Codex CLI（本机订阅）".to_string());
         }
         return Err(status.codex.message);
     }
-    let snapshot = settings::resolve_request(cap, None)?;
+    let snapshot = settings::resolve_request_for(cap, provider_id, model)?;
     match cap {
         CapId::Image => {
             // 出图槽位避免消耗生图费用：以 GET /models 核验鉴权与通道可达性

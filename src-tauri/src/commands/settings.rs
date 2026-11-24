@@ -103,8 +103,12 @@ pub async fn fetch_provider_models(req: FetchModelsRequest) -> Result<ModelListR
 }
 
 #[tauri::command]
-pub async fn verify_capability(cap: CapId) -> VerifyCapResponse {
-    match ai_proxy::verify_capability(cap).await {
+pub async fn verify_capability(
+    cap: CapId,
+    provider_id: Option<String>,
+    model: Option<String>,
+) -> VerifyCapResponse {
+    match ai_proxy::verify_capability(cap, provider_id.as_deref(), model.as_deref()).await {
         Ok(model) => VerifyCapResponse {
             ok: true,
             model: Some(model),

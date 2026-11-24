@@ -3,10 +3,12 @@ import { addToast, type ToastProps } from '@heroui/react';
 
 type ToastColor = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 
-/** 统一 toast 出口（对齐原型 toast()） */
+const stableToast = (msg: string, color: ToastColor = 'success') =>
+  addToast({ title: msg, color } as ToastProps);
+
+/** 统一 toast 出口（返回稳定函数引用，彻底避免放进 useEffect 依赖引发无限重渲染循环） */
 export function useToastMsg() {
-  return (msg: string, color: ToastColor = 'success') =>
-    addToast({ title: msg, color } as ToastProps);
+  return stableToast;
 }
 
 /** 出图尺寸：'自动'→不传，其余 × 转 x。 */

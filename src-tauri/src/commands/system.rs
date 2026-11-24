@@ -1,7 +1,10 @@
 use serde::Serialize;
+use std::sync::OnceLock;
 
 use crate::cdp::browser::{detect_system_browser, BrowserInfo};
-use crate::core::paths::{inspect_legacy_install, resolve_app_data_dir, LegacyInstallInfo};
+use crate::core::paths::{resolve_app_data_dir, LegacyInstallInfo};
+
+static CACHED_BROWSER: OnceLock<BrowserInfo> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,8 +22,14 @@ pub struct SystemHealth {
 #[tauri::command]
 pub fn get_system_health() -> Result<SystemHealth, String> {
     let data_dir = resolve_app_data_dir().map_err(|e| e.to_string())?;
-    let browser = detect_system_browser();
-    let legacy = inspect_legacy_install();
+    let browser = CACHED_BROWSER.get_or_init(detect_system_browser).clone();
+    // 迁移向导已移除，不再递归扫描旧版 Electron 目录下上万个文件，彻底避免轮询引发高 CPU/IO
+    let legacy = LegacyInstallInfo {
+        detected: false,
+        data_dir: None,
+        has_settings: false,
+        runtime_bytes: 0,
+    };
 
     Ok(SystemHealth {
         ok: true,

@@ -33,6 +33,8 @@ struct BrowserInstance {
     _port: u16,
     child: Child,
     session: CdpSession,
+    last_used: Instant,
+    headless: bool,
 }
 
 static INSTANCES: Lazy<Mutex<HashMap<PlatformKey, BrowserInstance>>> =
@@ -189,6 +191,7 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
         // 检查进程是否存活且会话仍连通
         let alive = inst.child.try_wait().ok().flatten().is_none();
         if alive && inst.session.eval_json("1 + 1").await.is_ok() {
+            inst.last_used = Instant::now();
             return Ok(inst.session.clone());
         }
         let _ = inst.child.kill();
@@ -221,6 +224,8 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
         "--proxy-server=direct://",
         "--proxy-bypass-list=*",
         "--disable-blink-features=AutomationControlled",
+        "--disable-extensions",
+        "--mute-audio",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-infobars",
@@ -267,6 +272,8 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
             _port: port,
             child,
             session: session.clone(),
+            last_used: Instant::now(),
+            headless: !visible_browser,
         },
     );
     Ok(session)
@@ -436,13 +443,31 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
 }
 
 pub async fn status_all() -> ScrapeStatusResp {
+    const IDLE_RECLAIM_SECS: u64 = 180;
     let mut platforms = HashMap::new();
-    let guard = INSTANCES.lock().await;
+    let mut guard = INSTANCES.lock().await;
+
+    // 顺手回收空闲超过 3 分钟的后台 headless 浏览器，防止长期驻留吃内存和 CPU（登录 Cookie 已落盘）
+    let stale_keys: Vec<PlatformKey> = guard
+        .iter()
+        .filter(|(_, inst)| inst.headless && inst.last_used.elapsed() > Duration::from_secs(IDLE_RECLAIM_SECS))
+        .map(|(k, _)| *k)
+        .collect();
+    for k in stale_keys {
+        if let Some(mut inst) = guard.remove(&k) {
+            let _ = inst.child.kill();
+            crate::core::logger::info("cdp", format!("reclaimed idle headless browser for {}", k.key()));
+        }
+    }
+
     for p in [PlatformKey::Douyin, PlatformKey::Xhs] {
-        let logged = if let Some(inst) = guard.get(&p) {
+        // 已有磁盘验证标记时直接返回 true，避免后台轮询频繁跨 CDP 跑 JS/fetch 消耗 CPU
+        let logged = if has_verified_marker(p) {
+            true
+        } else if let Some(inst) = guard.get(&p) {
             is_logged_in_live(&inst.session, p).await
         } else {
-            has_verified_marker(p)
+            false
         };
         platforms.insert(p.name().to_string(), logged);
     }
@@ -1082,6 +1107,8 @@ pub async fn open_verify_window(platform_name: &str, keyword: Option<&str>) -> R
                     _port: port,
                     child,
                     session,
+                    last_used: Instant::now(),
+                    headless: false,
                 },
             );
             crate::core::logger::info("cdp", format!("opened visible verify window for {}", platform.key()));

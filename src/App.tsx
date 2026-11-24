@@ -133,8 +133,8 @@ export default function App() {
     };
     window.addEventListener('scrape-status-changed', onChanged);
     const timer = window.setInterval(() => {
-      void refreshConnection();
-    }, 10_000);
+      if (!document.hidden) void refreshConnection();
+    }, 30_000);
     return () => {
       active = false;
       window.removeEventListener('scrape-status-changed', onChanged);
