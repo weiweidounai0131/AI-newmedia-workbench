@@ -495,10 +495,11 @@ fn active_pair(stored: &StoredSettings, cap: CapId) -> (String, String) {
         .cloned()
         .unwrap_or_else(|| cap.default_model().to_string());
 
-    // 若之前选了 Codex CLI 但当前机器未检测到或已被移除，自动回退到默认供应商
-    if cap == CapId::Image
+    // 若之前选了 Codex CLI 但当前机器未检测到或已被移除，或旧版配置指向已精简掉的内置项（如 aihubmix），自动回退到默认供应商
+    if (cap == CapId::Image
         && provider_id == CODEX_CLI_PROVIDER_ID
-        && (stored.codex_cli_removed || !ai_proxy::is_codex_cli_available_sync())
+        && (stored.codex_cli_removed || !ai_proxy::is_codex_cli_available_sync()))
+        || provider_by_id(stored, &provider_id).is_none()
     {
         provider_id = cap.default_provider_id().to_string();
         model = cap.default_model().to_string();
@@ -1116,21 +1117,34 @@ mod tests {
     #[test]
     fn remove_builtin_model_persists_in_blacklist() {
         let mut stored = StoredSettings::default();
-        // 切换 text 当前活动项为智谱，使得 deepseek-chat / deepseek-reasoner 可被移除
-        stored.providers.insert(CapId::Text, "zhipu".into());
-        stored.suppliers.insert(CapId::Text, "glm-5.3-flash".into());
+        // 添加自定义 text 供应商并设为活动项，使得内置 deepseek-chat 可被移除
+        stored.provider_catalog.insert(
+            "custom-1".into(),
+            ProviderRecord {
+                id: "custom-1".into(),
+                label: "Custom".into(),
+                portal: None,
+                key_id: "custom-1".into(),
+                base_url: "https://example.com/v1".into(),
+                protocol: ProviderProtocol::OpenaiChatCompletions,
+                models: vec![ProviderModel {
+                    id: "my-model".into(),
+                    label: None,
+                    capabilities: vec![CapId::Text],
+                }],
+                builtin: false,
+                revision: 1,
+                scope_cap: Some(CapId::Text),
+            },
+        );
+        stored.providers.insert(CapId::Text, "custom-1".into());
+        stored.suppliers.insert(CapId::Text, "my-model".into());
         stored.removed_capability_configs.insert(
             CapId::Text,
-            vec![
-                CapConfigEntry {
-                    provider_id: "deepseek".into(),
-                    model: "deepseek-chat".into(),
-                },
-                CapConfigEntry {
-                    provider_id: "deepseek".into(),
-                    model: "deepseek-reasoner".into(),
-                },
-            ],
+            vec![CapConfigEntry {
+                provider_id: "deepseek".into(),
+                model: "deepseek-chat".into(),
+            }],
         );
 
         let summary = build_summary(&stored);
@@ -1140,8 +1154,27 @@ mod tests {
                 .configurations
                 .iter()
                 .any(|c| c.provider_id == "deepseek"),
-            "removed builtin deepseek models must not reappear"
+            "removed builtin deepseek model must not reappear"
         );
+    }
+
+    #[test]
+    fn default_caps_are_clean_and_unconfigured() {
+        let stored = StoredSettings::default();
+        let summary = build_summary(&stored);
+        let find_cap = |cap: CapId| summary.caps.iter().find(|c| c.cap == cap).unwrap();
+        assert_eq!(find_cap(CapId::Text).provider, "deepseek");
+        assert_eq!(find_cap(CapId::Text).model, "deepseek-chat");
+        assert!(!find_cap(CapId::Text).configured);
+        assert_eq!(find_cap(CapId::VisionImg).provider, "zhipu");
+        assert_eq!(find_cap(CapId::VisionImg).model, "glm-4v-flash");
+        assert!(!find_cap(CapId::VisionImg).configured);
+        assert_eq!(find_cap(CapId::VisionVideo).provider, "qwen");
+        assert_eq!(find_cap(CapId::VisionVideo).model, "qwen-vl-max");
+        assert!(!find_cap(CapId::VisionVideo).configured);
+        assert_eq!(find_cap(CapId::Image).provider, "sudocode");
+        assert_eq!(find_cap(CapId::Image).model, "gpt-image-2");
+        assert!(!find_cap(CapId::Image).configured);
     }
 
     #[test]

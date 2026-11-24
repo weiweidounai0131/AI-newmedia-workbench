@@ -44,7 +44,7 @@ impl CapId {
             CapId::Text => "deepseek",
             CapId::VisionImg => "zhipu",
             CapId::VisionVideo => "qwen",
-            CapId::Image => "aihubmix",
+            CapId::Image => "sudocode",
         }
     }
 
@@ -114,23 +114,11 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             key_id: "deepseek".into(),
             base_url: "https://api.deepseek.com".into(),
             protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![
-                ProviderModel {
-                    id: "deepseek-chat".into(),
-                    label: None,
-                    capabilities: vec![CapId::Text],
-                },
-                ProviderModel {
-                    id: "deepseek-reasoner".into(),
-                    label: None,
-                    capabilities: vec![CapId::Text],
-                },
-                ProviderModel {
-                    id: "deepseek-flash".into(),
-                    label: Some("DeepSeek Flash".into()),
-                    capabilities: vec![CapId::VisionImg],
-                },
-            ],
+            models: vec![ProviderModel {
+                id: "deepseek-chat".into(),
+                label: None,
+                capabilities: vec![CapId::Text],
+            }],
             builtin: true,
             revision: 1,
             scope_cap: None,
@@ -142,28 +130,11 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             key_id: "zhipu".into(),
             base_url: "https://open.bigmodel.cn/api/paas/v4/".into(),
             protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![
-                ProviderModel {
-                    id: "glm-5.3-flash".into(),
-                    label: Some("GLM-5.3-Flash".into()),
-                    capabilities: vec![CapId::Text],
-                },
-                ProviderModel {
-                    id: "glm-4.5-air".into(),
-                    label: Some("GLM-4.5-Air".into()),
-                    capabilities: vec![CapId::Text],
-                },
-                ProviderModel {
-                    id: "glm-4v-flash".into(),
-                    label: None,
-                    capabilities: vec![CapId::VisionImg],
-                },
-                ProviderModel {
-                    id: "glm-4v-plus".into(),
-                    label: None,
-                    capabilities: vec![CapId::VisionImg],
-                },
-            ],
+            models: vec![ProviderModel {
+                id: "glm-4v-flash".into(),
+                label: None,
+                capabilities: vec![CapId::VisionImg],
+            }],
             builtin: true,
             revision: 1,
             scope_cap: None,
@@ -175,41 +146,11 @@ pub fn builtin_providers() -> Vec<ProviderRecord> {
             key_id: "qwen".into(),
             base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".into(),
             protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![
-                ProviderModel {
-                    id: "qwen-vl-max".into(),
-                    label: None,
-                    capabilities: vec![CapId::VisionVideo],
-                },
-                ProviderModel {
-                    id: "qwen-vl-plus".into(),
-                    label: None,
-                    capabilities: vec![CapId::VisionVideo],
-                },
-            ],
-            builtin: true,
-            revision: 1,
-            scope_cap: None,
-        },
-        ProviderRecord {
-            id: "aihubmix".into(),
-            label: "AIHubMix".into(),
-            portal: Some("https://aihubmix.com/".into()),
-            key_id: "openai".into(),
-            base_url: "https://aihubmix.com/v1".into(),
-            protocol: ProviderProtocol::OpenaiChatCompletions,
-            models: vec![
-                ProviderModel {
-                    id: "gpt-image-2".into(),
-                    label: None,
-                    capabilities: vec![CapId::Image],
-                },
-                ProviderModel {
-                    id: "gpt-image-1".into(),
-                    label: None,
-                    capabilities: vec![CapId::Image],
-                },
-            ],
+            models: vec![ProviderModel {
+                id: "qwen-vl-max".into(),
+                label: None,
+                capabilities: vec![CapId::VisionVideo],
+            }],
             builtin: true,
             revision: 1,
             scope_cap: None,
