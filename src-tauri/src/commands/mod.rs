@@ -5,3 +5,4 @@ pub mod library;
 pub mod scrape;
 pub mod settings;
 pub mod system;
+pub mod updater;

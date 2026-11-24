@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
@@ -44,6 +45,19 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg3RjQ3MjlCNEI0Q0Y3QjYKUldTMjkweExtM0wwaCszTXBnWUtRWFlnRFhtenVpeERxY09HdnNIbHQxRG9hLzBUYloxWUg4L1UK",
+      "endpoints": [
+        "https://gongzuotaigx.oss-cn-guangzhou.aliyuncs.com/v2/latest.json",
+        "https://ai-newmedia-workbench-updates.jiangjiawei0131.workers.dev/v2/latest.json",
+        "https://github.com/weiweidounai0131/AI-newmedia-workbench/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

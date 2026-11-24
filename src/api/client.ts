@@ -74,12 +74,23 @@ export interface RuntimeSetupResp {
 }
 
 export interface UpdateStatus {
-  phase: 'idle' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
   percent: number;
   transferred?: number;
   total?: number;
   version?: string;
+  notes?: string;
   message?: string;
+}
+
+export interface CheckUpdateResp {
+  ok: boolean;
+  available: boolean;
+  currentVersion: string;
+  version?: string;
+  notes?: string;
+  reason?: string;
+  error?: string;
 }
 
 export interface ChutuResp {
@@ -327,9 +338,37 @@ export const api = {
     return h.appVersion;
   },
 
-  checkForUpdates: async () => ({ ok: false, reason: 'Phase 6 将接入 Tauri Updater 双源自动更新' }),
-  getUpdateStatus: async (): Promise<UpdateStatus> => ({ phase: 'idle', percent: 0 }),
-  onUpdateStatus: (_callback: (status: UpdateStatus) => void) => () => {},
+  checkForUpdates: async (): Promise<CheckUpdateResp> => {
+    if (!isTauriRuntime()) {
+      return { ok: false, available: false, currentVersion: '2.0.0', reason: 'not-packaged' };
+    }
+    return tauriInvoke<CheckUpdateResp>('check_for_updates');
+  },
+  installUpdate: async (): Promise<void> => {
+    await tauriInvoke('install_pending_update');
+  },
+  getUpdateStatus: async (): Promise<UpdateStatus> => {
+    if (!isTauriRuntime()) return { phase: 'idle', percent: 0 };
+    return tauriInvoke<UpdateStatus>('get_update_status');
+  },
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
+    if (!isTauriRuntime()) return () => {};
+    let disposed = false;
+    let unlistenFn: (() => void) | null = null;
+    void tauriListen<UpdateStatus>('update-status', (payload) => {
+      if (!disposed) callback(payload);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlistenFn?.();
+    };
+  },
 
   exportLib: async (body: { folder: string; name: string; kind: string; content?: string; data?: string; topics?: any[] }): Promise<{ ok: boolean; files: LibFile[]; error?: string }> => {
     const res = await tauriInvoke<LibraryResp>('export_library_file', { payload: body });

@@ -49,14 +49,17 @@
 - **桌面与后端**：Rust (`edition = 2021`) · Tauri 2 · Tokio · Reqwest (`rustls-tls`) · `tokio-tungstenite`（原生 CDP）· `keyring` · `aes-gcm` · `rust_xlsxwriter` · `zip`（纯 Rust OOXML `.docx`）
 - **前端与动效**：React 18 · TypeScript 5.6 · Vite 5 · Tailwind CSS 3 · HeroUI 2.8 · [`motion/react`](https://motion.dev/)
 
+- **自动更新与多源容灾**
+  - 内置 Tauri 2 原生自动更新与 Ed25519 签名校验，按 **阿里云 OSS（国内优先）→ Cloudflare R2 → GitHub Releases** 顺序自动故障切换，支持启动静默检查、下载进度展示与一键重启安装。
+
 ---
 
 ## 下载安装
 
-前往本仓库 [**Releases**](https://github.com/weiweidounai0131/AI-newmedia-workbench/releases) 页面获取双平台安装包：
+前往本仓库 [**Releases**](https://github.com/weiweidounai0131/AI-newmedia-workbench/releases) 页面获取双平台安装包（国内也可由软件自动更新通道高速拉取）：
 
-- **macOS (Apple Silicon)**：`AI新媒体工作台_2.0.0_aarch64.dmg`
-- **Windows (x64)**：`AI新媒体工作台_2.0.0_x64-setup.exe`
+- **macOS (Apple Silicon)**：`AI-newmedia-workbench_2.0.0_aarch64.dmg`
+- **Windows (x64)**：`AI-newmedia-workbench_2.0.0_x64-setup.exe`
 
 > macOS 首次打开若遇到“未验证开发者”提示，可在终端执行一次 `xattr -cr /Applications/AI新媒体工作台.app` 后正常打开。
 > 如需在洗稿模块识别抖音视频，建议本机安装 [FFmpeg](https://ffmpeg.org/)（macOS 可通过 `brew install ffmpeg` 安装）。

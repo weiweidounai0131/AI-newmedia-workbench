@@ -11,6 +11,7 @@ import Tishici from './views/Tishici';
 import Chutu from './views/Chutu';
 import Sucai from './views/Sucai';
 import Settings from './views/Settings';
+import { useToastMsg } from './lib/ui';
 import appIcon from './assets/app-icon.png';
 
 const NAV = [
@@ -68,6 +69,7 @@ function View({ view }: { view: string }) {
 export default function App() {
   const view = useApp((s) => s.view);
   const theme = useApp((s) => s.theme);
+  const toast = useToastMsg();
   const [connection, setConnection] = useState<{ system: 'checking' | 'online' | 'offline'; douyin: boolean | null; xhs: boolean | null }>({
     system: 'checking',
     douyin: null,
@@ -105,8 +107,20 @@ export default function App() {
     void api.listLibrary().then((status) => {
       if (active) setLib(status.files);
     }).catch(() => {});
+    // 启动 6 秒后静默检查一次软件更新（仅在有新版本时温和提示，无更新或离线完全静默）
+    const updateTimer = window.setTimeout(() => {
+      void api
+        .checkForUpdates()
+        .then((res) => {
+          if (active && res.ok && res.available && res.version) {
+            toast(`发现新版本 v${res.version}，可前往「设置 → 软件更新」一键升级`, 'primary');
+          }
+        })
+        .catch(() => {});
+    }, 6_000);
     return () => {
       active = false;
+      window.clearTimeout(updateTimer);
     };
   }, []);
 

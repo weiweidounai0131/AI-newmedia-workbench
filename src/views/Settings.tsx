@@ -53,6 +53,8 @@ export default function Settings() {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof api.runtimeStatus>> | null>(null);
   const [runtimeInstalling, setRuntimeInstalling] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
   const [appVersion, setAppVersion] = useState('');
   const [pendingDelete, setPendingDelete] = useState<{ cap: CapId; config: CapabilityModelConfigSummary } | null>(null);
@@ -180,18 +182,33 @@ export default function Settings() {
       const result = await api.checkForUpdates();
       if (!result.ok) {
         const message: Record<string, string> = {
-          'not-packaged': '请在已安装的软件中检查更新',
+          'not-packaged': '请在已安装的桌面客户端中检查更新',
           'not-configured': '更新服务尚未配置',
-          checking: '正在检查更新，请稍候',
-          failed: '检查更新失败，请稍后重试',
+          checking: '正在检查或下载更新，请稍候',
+          failed: result.error || '检查更新失败，请稍后重试',
         };
-        toast(message[result.reason || 'failed'] || '检查更新失败，请稍后重试', result.reason === 'checking' ? 'warning' : 'danger');
+        toast(message[result.reason || 'failed'] || result.error || '检查更新失败，请稍后重试', result.reason === 'checking' ? 'warning' : 'danger');
+      } else if (result.available && result.version) {
+        setUpdateModalOpen(true);
+      } else {
+        toast(`当前已是最新版本（v${result.currentVersion}）`, 'success');
       }
-      // 有新版本或已是最新版本均由系统弹窗提示，避免与应用内提示重复。
     } catch (e: any) {
       toast(e?.message || '检查更新失败，请稍后重试', 'danger');
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function installUpdateNow() {
+    if (installingUpdate) return;
+    setInstallingUpdate(true);
+    setUpdateModalOpen(false);
+    try {
+      await api.installUpdate();
+    } catch (e: any) {
+      toast(e?.message || '下载或安装更新失败，请稍后重试', 'danger');
+      setInstallingUpdate(false);
     }
   }
 
@@ -842,12 +859,31 @@ export default function Settings() {
           <div className="set-row" style={{ border: 'none' }}>
             <div className="s-main">
               <div className="s-t">检查新版本</div>
-              <div className="s-d">工作台每次启动会自动检查更新；你也可以随时手动检查。发现新版后可自行选择下载并重启安装。</div>
+              <div className="s-d">自动连接国内高速源（阿里云 OSS → Cloudflare R2 → GitHub）检查签名更新；发现新版可一键下载并重启安装。</div>
             </div>
-            <Button size="sm" variant="bordered" className="topic-outline-button" isLoading={checkingUpdate} onPress={() => void checkForUpdates()}>
-              <Icon name="refresh" className="ic" size={14} /> 检查更新
-            </Button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {updateStatus.phase === 'available' && updateStatus.version && (
+                <Button size="sm" color="primary" isLoading={installingUpdate} onPress={() => setUpdateModalOpen(true)}>
+                  立即升级 v{updateStatus.version}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="bordered"
+                className="topic-outline-button"
+                isLoading={checkingUpdate || updateStatus.phase === 'checking'}
+                isDisabled={updateStatus.phase === 'downloading' || updateStatus.phase === 'installing'}
+                onPress={() => void checkForUpdates()}
+              >
+                <Icon name="refresh" className="ic" size={14} /> 检查更新
+              </Button>
+            </div>
           </div>
+          {updateStatus.phase === 'available' && updateStatus.version && (
+            <div className="tiny" style={{ color: 'var(--accent)', marginTop: 4 }}>
+              发现新版本 v{updateStatus.version}，点击「立即升级」即可在应用内完成签名校验与自动安装。
+            </div>
+          )}
           {updateStatus.phase === 'downloading' && (
             <div className="update-download-progress" role="status" aria-live="polite">
               <div className="update-download-copy">
@@ -962,6 +998,37 @@ export default function Settings() {
                   onPress={() => scrapeLogin(qrModal.platform)}
                 >
                   刷新二维码
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+
+      {/* 发现新版本确认弹窗 */}
+      <Modal isOpen={updateModalOpen} onOpenChange={setUpdateModalOpen} size="md">
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>发现新版本 v{updateStatus.version || ''}</ModalHeader>
+              <ModalBody>
+                <div className="tiny" style={{ color: 'var(--text-3)' }}>
+                  当前版本：v{appVersion || '2.0.0'} → 最新版本：v{updateStatus.version || ''}
+                </div>
+                {updateStatus.notes ? (
+                  <div className="out-box" style={{ maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 13 }}>
+                    {updateStatus.notes}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, lineHeight: 1.65 }}>
+                    安装包将通过 Ed25519 签名校验，下载完成后自动安装并重启工作台。
+                  </p>
+                )}
+              </ModalBody>
+              <ModalFooter>
+                <Button variant="light" onPress={onClose}>稍后再说</Button>
+                <Button color="primary" isLoading={installingUpdate} onPress={() => void installUpdateNow()}>
+                  立即下载并更新
                 </Button>
               </ModalFooter>
             </>

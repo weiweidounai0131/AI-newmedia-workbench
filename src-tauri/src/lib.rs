@@ -19,11 +19,17 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             // 系统健康与静默开发日志
             commands::system::get_system_health,
             commands::system::write_client_log,
             commands::system::open_external_url,
+            // 自动更新（阿里云 OSS + Cloudflare R2 + GitHub Releases 三源自动切换）
+            commands::updater::get_update_status,
+            commands::updater::check_for_updates,
+            commands::updater::install_pending_update,
             // 四能力 AI 设置与安全存储
             commands::settings::get_settings,
             commands::settings::set_capability,
