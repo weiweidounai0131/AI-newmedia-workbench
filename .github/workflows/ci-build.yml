@@ -65,6 +65,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
+      - name: Inject macOS install guide into DMG
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x scripts/inject-dmg-readme.sh
+          for dmg in src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            [ -f "$dmg" ] && scripts/inject-dmg-readme.sh "$dmg"
+          done
+
       - name: Report bundle sizes (macOS)
         if: runner.os == 'macOS'
         run: |
