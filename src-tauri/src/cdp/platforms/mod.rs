@@ -141,7 +141,8 @@ impl PlatformKey {
               const nodes = document.querySelectorAll('section.note-item, div.note-item');
               for (const n of nodes) {
                 const a = n.querySelector('a.cover') || n.querySelector('a[href*="/explore/"]') || n.querySelector('a');
-                const href = a ? a.getAttribute('href') : '';
+                const rawHref = a ? (a.getAttribute('href') || '') : '';
+                const href = rawHref.replace('/search_result/', '/explore/');
                 const titleEl = n.querySelector('.title span, .title, .content');
                 const img = n.querySelector('img');
                 const title = ((titleEl && titleEl.textContent) || (img && img.alt) || '').trim();

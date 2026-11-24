@@ -12,10 +12,11 @@ pub struct StartDownloadResp {
 }
 
 #[tauri::command]
-pub fn xigao_douyin_start(app: AppHandle, link: String) -> Result<StartDownloadResp, String> {
+pub async fn xigao_douyin_start(app: AppHandle, link: String) -> Result<StartDownloadResp, String> {
     if link.trim().is_empty() {
         return Err("抖音链接不能为空".into());
     }
+    crate::core::logger::info("download:douyin", format!("start task for link len={}", link.len()));
     let task_id = douyin::start_task(app, link);
     Ok(StartDownloadResp { task_id })
 }
@@ -31,10 +32,11 @@ pub fn xigao_douyin_source(path: String, title: Option<String>) -> Result<Source
 }
 
 #[tauri::command]
-pub fn xigao_xhs_start(app: AppHandle, link: String) -> Result<StartDownloadResp, String> {
+pub async fn xigao_xhs_start(app: AppHandle, link: String) -> Result<StartDownloadResp, String> {
     if link.trim().is_empty() {
         return Err("小红书链接不能为空".into());
     }
+    crate::core::logger::info("download:xhs", format!("start task for link len={}", link.len()));
     let task_id = xhs::start_task(app, link);
     Ok(StartDownloadResp { task_id })
 }

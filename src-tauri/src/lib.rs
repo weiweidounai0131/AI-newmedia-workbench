@@ -5,12 +5,24 @@ pub mod downloader;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    core::logger::install_panic_hook();
+    core::logger::info(
+        "app",
+        format!(
+            "starting AI新媒体工作台 v{} ({}/{})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            // 系统健康与探测
+            // 系统健康与静默开发日志
             commands::system::get_system_health,
+            commands::system::write_client_log,
             // 四能力 AI 设置与安全存储
             commands::settings::get_settings,
             commands::settings::set_capability,

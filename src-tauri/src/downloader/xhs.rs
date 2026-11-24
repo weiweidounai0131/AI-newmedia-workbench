@@ -19,7 +19,15 @@ use crate::downloader::douyin::{extract_http_url, DownloadProgressEvent};
 
 const XHS_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 static RE_NOTE_ID: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?:explore|discovery/item|item)/([0-9a-zA-Z]+)"#).unwrap());
+    Lazy::new(|| Regex::new(r#"(?:explore|discovery/item|search_result|item)/([0-9a-zA-Z]+)"#).unwrap());
+
+/// 规范化小红书笔记链接：将搜索页抽取出的 `/search_result/<note_id>` 自动转为标准 `/explore/<note_id>`（保留 xsec_token 等查询参数）
+fn normalize_xhs_link(raw: &str) -> String {
+    if raw.contains("xiaohongshu.com/search_result/") {
+        return raw.replace("/search_result/", "/explore/");
+    }
+    raw.to_string()
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,8 +121,10 @@ fn extract_note_from_state(state: &Value) -> Option<&Value> {
 
 async fn run_xhs_task(app: AppHandle, task_id: String, raw_link: String) {
     let result: Result<XhsDownloadResult, String> = async {
-        let link = extract_http_url(&raw_link)
+        let extracted = extract_http_url(&raw_link)
             .ok_or_else(|| "未识别到有效的小红书 http(s) 链接".to_string())?;
+        let link = normalize_xhs_link(&extracted);
+        crate::core::logger::info("download:xhs", format!("task {task_id} normalized link={link}"));
 
         update_task(&app, &task_id, "running", 18.0, "正在通过共享浏览器会话读取小红书笔记内容…".into(), None, None);
 
@@ -235,6 +245,7 @@ async fn run_xhs_task(app: AppHandle, task_id: String, raw_link: String) {
             );
         }
         Err(err) => {
+            crate::core::logger::error("download:xhs", format!("task {task_id} failed: {err}"));
             update_task(
                 &app,
                 &task_id,
@@ -262,7 +273,7 @@ pub fn start_task(app: AppHandle, link: String) -> String {
     XHS_TASKS.lock().unwrap().insert(id.clone(), task);
 
     let tid = id.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         run_xhs_task(app, tid, link).await;
     });
     id

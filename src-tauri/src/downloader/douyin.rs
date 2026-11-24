@@ -262,6 +262,7 @@ async fn run_douyin_task(app: AppHandle, task_id: String, raw_link: String) {
             );
         }
         Err(err) => {
+            crate::core::logger::error("download:douyin", format!("task {task_id} failed: {err}"));
             update_task(
                 &app,
                 &task_id,
@@ -289,7 +290,7 @@ pub fn start_task(app: AppHandle, link: String) -> String {
     TASKS.lock().unwrap().insert(id.clone(), task);
 
     let tid = id.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         run_douyin_task(app, tid, link).await;
     });
     id

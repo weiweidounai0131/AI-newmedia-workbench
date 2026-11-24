@@ -230,10 +230,15 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("拉起本机浏览器失败（{exe}）：{e}"))?;
+    crate::core::logger::info(
+        "cdp",
+        format!("spawned browser for {} on port {port} (headless={})", platform.key(), !visible_browser),
+    );
 
     let ws_url = match fetch_page_ws_url(port, &mut child).await {
         Ok(u) => u,
         Err(e) => {
+            crate::core::logger::error("cdp", format!("fetch ws url failed for {}: {e}", platform.key()));
             let _ = child.kill();
             return Err(e);
         }
@@ -772,6 +777,7 @@ pub async fn fetch_initial_state_via_cdp(
     platform: PlatformKey,
     url: &str,
 ) -> Result<Value, String> {
+    crate::core::logger::info("cdp", format!("fetch_initial_state_via_cdp platform={} url={url}", platform.key()));
     let session = ensure_session(platform).await?;
     session.navigate(url).await?;
 
@@ -791,12 +797,14 @@ pub async fn fetch_initial_state_via_cdp(
             .await
         {
             if !val.is_null() {
+                crate::core::logger::info("cdp", format!("captured __INITIAL_STATE__ for {}", platform.key()));
                 return Ok(val);
             }
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
 
+    crate::core::logger::warn("cdp", format!("timeout waiting __INITIAL_STATE__ for {} url={url}", platform.key()));
     Err("未在页面中获取到内容数据，可能登录已过期或链接受风控保护".into())
 }
 

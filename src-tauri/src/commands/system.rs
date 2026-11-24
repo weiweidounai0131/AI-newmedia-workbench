@@ -33,3 +33,13 @@ pub fn get_system_health() -> Result<SystemHealth, String> {
         legacy,
     })
 }
+
+#[tauri::command]
+pub fn write_client_log(level: String, module: String, message: String) {
+    let lv = match level.to_uppercase().as_str() {
+        "ERROR" => "ERROR",
+        "WARN" => "WARN",
+        _ => "INFO",
+    };
+    crate::core::logger::write_log(lv, &format!("web:{module}"), &message);
+}

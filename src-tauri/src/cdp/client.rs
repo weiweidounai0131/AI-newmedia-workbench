@@ -36,7 +36,7 @@ impl CdpSession {
         let pending_reader = Arc::clone(&pending);
         let events_reader = events.clone();
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if write.send(Message::Text(msg.into())).await.is_err() {
                     break;
@@ -44,7 +44,7 @@ impl CdpSession {
             }
         });
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             while let Some(Ok(msg)) = read.next().await {
                 let text = match msg {
                     Message::Text(t) => t.to_string(),
