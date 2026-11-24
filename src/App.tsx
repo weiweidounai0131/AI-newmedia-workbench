@@ -128,11 +128,16 @@ export default function App() {
       }
     };
     void refreshConnection();
+    const onChanged = () => {
+      void refreshConnection();
+    };
+    window.addEventListener('scrape-status-changed', onChanged);
     const timer = window.setInterval(() => {
       void refreshConnection();
     }, 10_000);
     return () => {
       active = false;
+      window.removeEventListener('scrape-status-changed', onChanged);
       window.clearInterval(timer);
     };
   }, []);

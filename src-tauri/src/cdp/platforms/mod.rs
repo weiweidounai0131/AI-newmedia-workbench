@@ -104,22 +104,23 @@ impl PlatformKey {
 
     pub fn guest_indicators(&self) -> &'static [&'static str] {
         match self {
-            Self::Douyin => &["[data-e2e='login-button']", "#login-panel-new"],
-            Self::Xhs => &[".login-btn", "#login-btn", ".login-btn-component"],
+            Self::Douyin => &["[data-e2e='login-button']", ".login-button", "#login-panel-new"],
+            Self::Xhs => &[".login-btn", "#login-btn", ".login-btn-component", ".side-bar .login-btn"],
         }
     }
 
     pub fn login_progress_indicators(&self) -> &'static [&'static str] {
         match self {
-            Self::Douyin => &[".web-login-scan-code", "#login-panel-new"],
-            Self::Xhs => &[".login-container", ".login-box-container", ".login-popup"],
+            Self::Douyin => &[".web-login-scan-code", "#login-panel-new", ".web-login-container"],
+            Self::Xhs => &[".login-container", ".login-box-container", ".login-popup", ".qrcode-img"],
         }
     }
 
     pub fn logged_in_indicators(&self) -> &'static [&'static str] {
         match self {
-            Self::Douyin => &["[data-e2e='user-avatar']", ".avatar"],
-            Self::Xhs => &[".reds-avatar", ".user-avatar", ".user-info", "[class*='avatar']"],
+            // 仅匹配顶栏/侧栏本人头像，绝不使用宽泛的 .avatar / [class*='avatar']（会误匹配信息流博主头像！）
+            Self::Douyin => &["[data-e2e='user-avatar']", "[data-e2e='live-avatar']"],
+            Self::Xhs => &[".side-bar .user .user-avatar", ".side-bar .user .reds-avatar"],
         }
     }
 

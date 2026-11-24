@@ -23,6 +23,12 @@ Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 window.chrome = window.chrome || { runtime: {} };
 "#;
 
+#[cfg(target_os = "macos")]
+const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+#[cfg(not(target_os = "macos"))]
+const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 struct BrowserInstance {
     _port: u16,
     child: Child,
@@ -149,14 +155,24 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
     let user_data = profile_dir(platform)?;
 
     let mut cmd = Command::new(&exe);
+    let visible_browser = std::env::var("NEWMEDIA_VISIBLE_BROWSER")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+
+    // 默认使用 --headless=new（Chrome 新版完整有头管线）实现 100% 后台无感运行，不弹窗口不抢焦点
+    if !visible_browser {
+        cmd.arg("--headless=new");
+    }
     cmd.args([
         &format!("--remote-debugging-port={port}"),
         &format!("--user-data-dir={}", user_data.to_string_lossy()),
+        &format!("--user-agent={CHROME_UA}"),
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-infobars",
-        "--window-size=1220,820",
+        "--window-size=1280,860",
+        "--lang=zh-CN",
         "about:blank",
     ])
     .stdin(Stdio::null())
@@ -169,6 +185,16 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
 
     let ws_url = fetch_page_ws_url(port).await?;
     let session = CdpSession::connect(&ws_url).await?;
+    let _ = session
+        .send(
+            "Emulation.setUserAgentOverride",
+            serde_json::json!({
+                "userAgent": CHROME_UA,
+                "acceptLanguage": "zh-CN,zh;q=0.9",
+                "platform": if cfg!(target_os = "macos") { "MacIntel" } else { "Win32" }
+            }),
+        )
+        .await;
     let _ = session.add_stealth_script(STEALTH_JS).await;
 
     guard.insert(
@@ -249,11 +275,75 @@ async fn check_risk_message(session: &CdpSession) -> Option<String> {
     None
 }
 
+/// 通过平台官方同源接口校验真实登录态（彻底杜绝小红书游客 web_session 与信息流头像误判）
+async fn probe_api_logged_in(session: &CdpSession, platform: PlatformKey) -> Option<bool> {
+    match platform {
+        PlatformKey::Xhs => {
+            let js = r#"(async () => {
+              try {
+                if (!location.hostname.includes('xiaohongshu.com')) return null;
+                const resp = await fetch('https://edith.xiaohongshu.com/api/sns/web/v2/user/me', {
+                  credentials: 'include',
+                  headers: { 'accept': 'application/json' }
+                });
+                if (!resp.ok) return null;
+                const j = await resp.json();
+                const d = j && j.data;
+                if (!d) return false;
+                if (d.guest === true) return false;
+                return Boolean(d.user_id && String(d.user_id).length > 0 && d.guest === false);
+              } catch (_) {
+                return null;
+              }
+            })()"#;
+            match session.eval_json(js).await {
+                Ok(Value::Bool(b)) => Some(b),
+                _ => None,
+            }
+        }
+        PlatformKey::Douyin => {
+            let js = r#"(async () => {
+              try {
+                if (!location.hostname.includes('douyin.com')) return null;
+                const resp = await fetch('https://www.douyin.com/aweme/v1/web/user/profile/self/', {
+                  credentials: 'include',
+                  headers: { 'accept': 'application/json' }
+                });
+                if (!resp.ok) return null;
+                const j = await resp.json();
+                const u = j && j.user;
+                return Boolean(u && (u.uid || u.sec_uid));
+              } catch (_) {
+                return null;
+              }
+            })()"#;
+            match session.eval_json(js).await {
+                Ok(Value::Bool(b)) => Some(b),
+                _ => None,
+            }
+        }
+    }
+}
+
 async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool {
     let cookie_ok = has_auth_cookie(session, platform).await;
     if !cookie_ok {
+        clear_verified_marker(platform);
         return false;
     }
+
+    // 1. 最高权威：同源官方 /user/me 接口判定（直接区分游客与真实登录）
+    if let Some(api_logged) = probe_api_logged_in(session, platform).await {
+        if api_logged {
+            set_verified_marker(platform);
+            return true;
+        } else {
+            clear_verified_marker(platform);
+            return false;
+        }
+    }
+
+    // 2. 其次页面精确 DOM 探针（仅匹配本人头像且无登录按钮/无登录弹窗）
     match probe_dom_logged_in(session, platform).await {
         Some(true) => {
             set_verified_marker(platform);
@@ -263,7 +353,14 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
             clear_verified_marker(platform);
             false
         }
-        None => has_verified_marker(platform),
+        None => {
+            // 小红书游客也有 web_session，无法确认时绝不盲信
+            if platform == PlatformKey::Xhs {
+                false
+            } else {
+                has_verified_marker(platform)
+            }
+        }
     }
 }
 
@@ -301,20 +398,32 @@ pub async fn start_login_qr(platform_name: &str) -> Result<QrLoginResp, String> 
         });
     }
 
-    // 尝试点击登录按钮
+    // 尝试点击登录按钮，并在抖音侧主动切换到「扫码登录」标签页确保二维码可见
     let triggers_json = serde_json::to_string(platform.login_triggers()).unwrap_or_default();
     let _ = session
         .eval_json(&format!(
             r#"(() => {{
+              const clickVisible = (el) => {{
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {{ el.click(); return true; }}
+                return false;
+              }};
               for (const sel of {triggers_json}) {{
-                const el = document.querySelector(sel);
-                if (el && el.getBoundingClientRect().width > 0) {{ el.click(); return true; }}
+                if (clickVisible(document.querySelector(sel))) break;
               }}
-              return false;
+              // 若登录框已存在但停在密码/验证码页，主动点出扫码登录
+              for (const el of document.querySelectorAll('button, div, span, li, a')) {{
+                const t = (el.textContent || '').trim();
+                if (t === '扫码登录' || t === '二维码登录') {{
+                  if (clickVisible(el)) break;
+                }}
+              }}
+              return true;
             }})()"#
         ))
         .await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    tokio::time::sleep(Duration::from_millis(1400)).await;
 
     // 优先精准读取二维码：严格校验近似正方形（过滤横幅/广告图），支持 data:image / canvas 无损直读
     let qr_sels_json = serde_json::to_string(platform.qr_selectors()).unwrap_or_default();

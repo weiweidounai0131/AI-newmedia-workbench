@@ -107,6 +107,7 @@ export default function Settings() {
           stopPoll();
           setQrModal({ open: false, platform: '', qr: null, headful: true, error: null });
           setScrapeStatus((s) => ({ ...s, platforms: { ...s.platforms, [platform]: true } }));
+          window.dispatchEvent(new CustomEvent('scrape-status-changed'));
           toast(`已登录「${platform}」`, 'success');
           setLoginLoading(null);
         }
@@ -126,11 +127,17 @@ export default function Settings() {
       } else if (r.connected) {
         setQrModal({ open: false, platform: '', qr: null, headful: true, error: null });
         setScrapeStatus((s) => ({ ...s, platforms: { ...s.platforms, [platform]: true } }));
+        window.dispatchEvent(new CustomEvent('scrape-status-changed'));
         toast(`已登录「${platform}」`, 'success');
         setLoginLoading(null);
         return;
       } else {
-        setQrModal((m) => ({ ...m, qr: r.qr, headful: r.headful }));
+        setQrModal((m) => ({
+          ...m,
+          qr: r.qr,
+          headful: r.headful,
+          error: !r.qr ? '暂未捕获到登录二维码，请点击下方「刷新二维码」重试' : null,
+        }));
       }
       startPoll(platform);
     } catch (e: any) {
@@ -896,9 +903,9 @@ export default function Settings() {
                   <div style={{ paddingTop: 40 }}>
                     <Spinner />
                     <div className="tiny" style={{ marginTop: 16, color: 'var(--text-3)' }}>
-                      正在打开「{qrModal.platform}」登录窗口…
+                      正在后台安全获取「{qrModal.platform}」登录二维码…
                       <br />
-                      若未显示二维码，请在弹出的浏览器窗口中扫码
+                      全程后台静默运行，无需切换外部浏览器窗口
                     </div>
                   </div>
                 ) : null}
