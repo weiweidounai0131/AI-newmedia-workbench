@@ -89,13 +89,10 @@ export default function Chuangyi() {
   async function downloadWord(content = creative.out, title = creativeFileBase()) {
     if (!content.trim()) return toast('没有可导出的创意内容', 'warning');
     try {
-      const blob = await api.downloadWord({ name: `创意+${title}`, content });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `创意+${title}.docx`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      const safe = title.replace(/[\\/:*?"<>|]/g, '_').replace(/\.docx$/i, '').trim() || '未命名创意';
+      const defaultName = safe.startsWith('创意+') ? `${safe}.docx` : `创意+${safe}.docx`;
+      const saved = await api.saveWordFile(defaultName, content);
+      if (saved) toast('Word 文档已导出保存', 'success');
     } catch (error: any) { toast(error?.message || '导出 Word 失败', 'danger'); }
   }
 
@@ -172,7 +169,7 @@ export default function Chuangyi() {
       <div className="panel-body" style={{ paddingTop: 0 }}>
         <div className="finder-list creative-table-list">
           <div className="finder-head creative-table-head"><span>序列</span><span>稿件标题</span><span>热点名称</span><span>热点链接</span><span>改写后的文件</span></div>
-          {creativeTable.length ? creativeTable.map((item, index) => <div className="finder-row creative-table-row" key={item.id}><span>{index + 1}</span><span title={item.title}>{item.title}</span><span title={item.hotTitle}>{item.hotTitle}</span><span>{item.hotLink ? <a className="t-link" href={item.hotLink} target="_blank" rel="noreferrer">打开 ↗</a> : '—'}</span><span><a className="t-link" onClick={() => void downloadWord(item.content, item.fileName.replace(/^创意\+/, '').replace(/\.docx$/i, ''))}>{item.fileName} ↧</a></span></div>) : <div className="sucai-empty"><Icon name="archive" className="ic" size={30} /><div>还没有创意记录 · 生成后点「导出到素材库」即可归档</div></div>}
+          {creativeTable.length ? creativeTable.map((item, index) => <div className="finder-row creative-table-row" key={item.id}><span>{index + 1}</span><span title={item.title}>{item.title}</span><span title={item.hotTitle}>{item.hotTitle}</span><span>{item.hotLink ? <a className="t-link" href={item.hotLink} target="_blank" rel="noreferrer">打开 ↗</a> : '—'}</span><span><a className="t-link" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%' }} onClick={() => void downloadWord(item.content, item.fileName)}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.fileName}</span><Icon name="download" className="ic" size={14} style={{ flexShrink: 0 }} /></a></span></div>) : <div className="sucai-empty"><Icon name="archive" className="ic" size={30} /><div>还没有创意记录 · 生成后点「导出到素材库」即可归档</div></div>}
         </div>
       </div>
     </div>}

@@ -370,7 +370,22 @@ export default function Xuanti() {
             <Button size="sm" color="danger" onPress={() => clearTopics()}>
               <Icon name="trash" className="ic" size={14} /> 清空
             </Button>
-            <Button className="topic-outline-button" size="sm" variant="bordered" onPress={() => toast('可通过右侧“导出 Excel”生成选题表文件', 'default')}>
+            <Button
+              className="topic-outline-button"
+              size="sm"
+              variant="bordered"
+              onPress={async () => {
+                if (!orderedTopics.length) return toast('选题表为空，请先采集或采用选题', 'warning');
+                try {
+                  const d = new Date();
+                  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                  const saved = await api.saveTopicsExcel(`选题表_${ymd}.xlsx`, orderedTopics);
+                  if (saved) toast('Excel 选题表已导出保存', 'success');
+                } catch (e: any) {
+                  toast(e?.message || '导出 Excel 失败', 'danger');
+                }
+              }}
+            >
               <Icon name="download" className="ic" size={14} /> 导出 Excel
             </Button>
             <Button size="sm" color="primary" onPress={exportToLib}>

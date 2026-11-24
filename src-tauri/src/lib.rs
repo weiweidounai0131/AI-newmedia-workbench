@@ -56,6 +56,9 @@ pub fn run() {
             commands::library::read_library_word,
             commands::library::open_library_file,
             commands::library::read_library_image_data_url,
+            commands::library::save_topics_xlsx,
+            commands::library::save_word_docx,
+            commands::library::save_image_base64,
             // Phase 3 Rust 原生 CDP 引擎（扫码登录 / 登录态 / 主动搜索 / 冷却）
             commands::scrape::scrape_status,
             commands::scrape::scrape_cooldowns,

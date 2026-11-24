@@ -37,12 +37,23 @@ const P: Record<string, string> = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
 };
 
-export function Icon({ name, className = 'ic', size = 24 }: { name: string; className?: string; size?: number }) {
+export function Icon({
+  name,
+  className = 'ic',
+  size = 24,
+  style,
+}: {
+  name: string;
+  className?: string;
+  size?: number;
+  style?: React.CSSProperties;
+}) {
   return (
     <svg
       className={className}
       width={size}
       height={size}
+      style={{ flexShrink: 0, ...style }}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

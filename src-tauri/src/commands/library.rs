@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
 
-use crate::core::library::{self, ExportPayload, LibraryStatus};
+use crate::core::library::{self, ExportPayload, LibTopic, LibraryStatus};
 
 #[derive(Debug, Serialize)]
 pub struct OkResp {
@@ -89,4 +89,40 @@ pub fn read_library_image_data_url(folder: String, name: String) -> Result<Strin
         "image/jpeg"
     };
     Ok(format!("data:{mime};base64,{}", B64.encode(bytes)))
+}
+
+#[tauri::command]
+pub fn save_topics_xlsx(path: String, topics: Vec<LibTopic>) -> Result<OkResp, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("保存路径不能为空".into());
+    }
+    let bytes = library::build_topics_xlsx_bytes(&topics)?;
+    std::fs::write(trimmed, bytes).map_err(|e| format!("保存 Excel 失败：{e}"))?;
+    Ok(OkResp { ok: true })
+}
+
+#[tauri::command]
+pub fn save_word_docx(path: String, content: String) -> Result<OkResp, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("保存路径不能为空".into());
+    }
+    let bytes = library::build_docx_bytes(&content)?;
+    std::fs::write(trimmed, bytes).map_err(|e| format!("保存 Word 失败：{e}"))?;
+    Ok(OkResp { ok: true })
+}
+
+#[tauri::command]
+pub fn save_image_base64(path: String, data: String) -> Result<OkResp, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("保存路径不能为空".into());
+    }
+    let raw_b64 = data.split(',').next_back().unwrap_or("");
+    let bytes = B64
+        .decode(raw_b64)
+        .map_err(|e| format!("图片解码失败：{e}"))?;
+    std::fs::write(trimmed, bytes).map_err(|e| format!("保存图片失败：{e}"))?;
+    Ok(OkResp { ok: true })
 }

@@ -89,15 +89,15 @@ export default function Chutu() {
     }
   }
 
-  function download() {
+  async function download() {
     if (!chutu.b64) return;
-    const a = document.createElement('a');
-    a.href = `data:image/png;base64,${chutu.b64}`;
-    a.download = `${chutu.refImgName || '海报'}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    toast('已下载', 'success');
+    try {
+      const base = (chutu.refImgName || '海报').replace(/\.\w+$/, '');
+      const saved = await api.saveImageFile(`${base}.png`, chutu.b64);
+      if (saved) toast('图片已保存', 'success');
+    } catch (error: any) {
+      toast(error?.message || '保存图片失败', 'danger');
+    }
   }
 
   async function exportLib() {

@@ -246,16 +246,10 @@ export default function Xigao() {
     if (!content.trim()) return toast('没有可导出的洗稿内容', 'warning');
     setWordExporting(true);
     try {
-      const blob = await api.downloadWord({ name: `洗稿+${title}`, content });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `洗稿+${title}.docx`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
-      toast('Word 已开始下载', 'success');
+      const safe = title.replace(/[\\/:*?"<>|]/g, '_').replace(/\.docx$/i, '').trim() || '未命名稿件';
+      const defaultName = safe.startsWith('洗稿+') ? `${safe}.docx` : `洗稿+${safe}.docx`;
+      const saved = await api.saveWordFile(defaultName, content);
+      if (saved) toast('Word 文档已导出保存', 'success');
     } catch (error: any) {
       toast(error?.message || 'Word 导出失败', 'danger');
     } finally {
@@ -597,7 +591,16 @@ export default function Xigao() {
                         <td>{f.source === '—' ? '—' : <span className={`topic-source topic-source-${f.source === '热榜' ? 'hot' : 'search'}`}>{f.source}</span>}</td>
                         <td>{f.link ? <a className="t-link" href={f.link} target="_blank" rel="noreferrer">打开 ↗</a> : '—'}</td>
                         <td>
-                          <a className="t-link" onClick={() => downloadWord(f.content, f.title)}>{f.fileName || `洗稿+${f.title}.docx`} ↧</a>
+                          <a
+                            className="t-link"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%' }}
+                            onClick={() => void downloadWord(f.content, f.fileName || f.title)}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {f.fileName || `洗稿+${f.title}.docx`}
+                            </span>
+                            <Icon name="download" className="ic" size={14} style={{ flexShrink: 0 }} />
+                          </a>
                         </td>
                       </tr>
                     ))

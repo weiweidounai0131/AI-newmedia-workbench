@@ -1,4 +1,4 @@
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type { CapId, LibFile, ProviderProtocol, SettingsSummary } from '../store/appStore';
 import { isTauriRuntime, tauriInvoke, tauriListen } from './tauriBridge';
@@ -340,6 +340,45 @@ export const api = {
       res.base64,
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
+  },
+
+  /** 系统原生「另存为」导出 Excel（macOS / Windows 双平台可靠落盘） */
+  saveTopicsExcel: async (defaultName: string, topics: any[]): Promise<string | null> => {
+    const cleanName = defaultName.endsWith('.xlsx') ? defaultName : `${defaultName}.xlsx`;
+    const filePath = await save({
+      title: '导出选题表 Excel',
+      defaultPath: cleanName,
+      filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
+    });
+    if (!filePath) return null;
+    await tauriInvoke('save_topics_xlsx', { path: filePath, topics });
+    return filePath;
+  },
+
+  /** 系统原生「另存为」导出 Word（替代在 WKWebView 中失效的 <a download>） */
+  saveWordFile: async (defaultName: string, content: string): Promise<string | null> => {
+    const cleanName = defaultName.endsWith('.docx') ? defaultName : `${defaultName}.docx`;
+    const filePath = await save({
+      title: '导出 Word 文档',
+      defaultPath: cleanName,
+      filters: [{ name: 'Word 文档', extensions: ['docx'] }],
+    });
+    if (!filePath) return null;
+    await tauriInvoke('save_word_docx', { path: filePath, content });
+    return filePath;
+  },
+
+  /** 系统原生「另存为」导出图片 */
+  saveImageFile: async (defaultName: string, b64OrDataUrl: string): Promise<string | null> => {
+    const cleanName = /\.(png|jpe?g|webp)$/i.test(defaultName) ? defaultName : `${defaultName}.png`;
+    const filePath = await save({
+      title: '保存图片',
+      defaultPath: cleanName,
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+    });
+    if (!filePath) return null;
+    await tauriInvoke('save_image_base64', { path: filePath, data: b64OrDataUrl });
+    return filePath;
   },
 
   parseWord: (body: { name: string; data: string }) =>
