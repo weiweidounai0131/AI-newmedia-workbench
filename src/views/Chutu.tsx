@@ -120,24 +120,39 @@ export default function Chutu() {
               <Icon name="image" className="ic" size={18} /> 出图
             </h3>
             <div className="spacer" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                className="tiny"
+                style={{
+                  color: imageConfigured ? 'var(--text-2)' : 'var(--warn)',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 999,
+                  padding: '3px 10px',
+                }}
+              >
+                {chutu.provider === 'codex'
+                  ? 'Codex CLI · 本机订阅'
+                  : `${imageProviderLabel} · ${imageModel}${imageConfigured ? '' : '（未配置）'}`}
+              </span>
+              <button
+                type="button"
+                className="tiny"
+                style={{
+                  border: 0,
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  cursor: 'pointer',
+                  padding: '2px 4px',
+                  fontWeight: 500,
+                }}
+                onClick={() => setView('settings')}
+              >
+                切换
+              </button>
+            </div>
           </div>
           <div className="panel-body">
-            <div className="field">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <label style={{ margin: 0 }}>当前出图模型</label>
-                <Button size="sm" variant="light" onPress={() => setView('settings')}>
-                  去设置切换
-                </Button>
-              </div>
-              <div className="out-box" style={{ padding: '10px 12px', marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontWeight: 600, fontSize: 13 }}>
-                  {imageProviderLabel} · {imageModel}
-                </span>
-                <span className={`ai-model-status ${imageConfigured ? 'verified' : 'empty'}`}>
-                  {chutu.provider === 'codex' ? '本机已就绪' : imageConfigured ? '已配置' : '未配置密钥'}
-                </span>
-              </div>
-            </div>
             <div className="field">
               <label>提示词（从提示词模块确认后贴入）</label>
               <Textarea

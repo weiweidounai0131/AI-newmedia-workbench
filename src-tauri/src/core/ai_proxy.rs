@@ -768,11 +768,11 @@ pub async fn generate_codex_image(
             ref_paths.push(file);
         }
 
-        let model = std::env::var("NEWMEDIA_CODEX_IMAGEGEN_MODEL")
+        // 仅在显式指定 NEWMEDIA_CODEX_IMAGEGEN_MODEL 时传 --model；默认沿用用户 ~/.codex/config.toml 当前有效模型，避免版本升级后硬编码模型失效
+        let custom_model = std::env::var("NEWMEDIA_CODEX_IMAGEGEN_MODEL")
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "gpt-5.5".to_string());
+            .filter(|s| !s.is_empty());
 
         let mut cmd = tokio::process::Command::new(&cli);
         cmd.env("PATH", enriched_child_path());
@@ -791,18 +791,18 @@ pub async fn generate_codex_image(
         cmd.args([
             "exec",
             "--json",
+            "--ephemeral",
             "--skip-git-repo-check",
             "--sandbox",
             "danger-full-access",
-            "-c",
-            "mcp_servers={}",
             "-C",
             &temp_dir.to_string_lossy(),
             "--add-dir",
             &generated_root.to_string_lossy(),
-            "--model",
-            &model,
         ]);
+        if let Some(ref m) = custom_model {
+            cmd.args(["--model", m]);
+        }
         for rp in &ref_paths {
             cmd.arg("-i").arg(rp);
         }
@@ -835,18 +835,34 @@ pub async fn generate_codex_image(
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if !output.status.success() {
-            let detail = if !stderr.is_empty() { &stderr } else { &stdout };
-            crate::core::logger::error("codex", format!("codex exec exited {}: {}", output.status, detail));
-            // 优先取末尾关键错误行，避免被启动时的 skills/mcp 警告截断
-            let tail: String = detail
-                .chars()
-                .rev()
-                .take(400)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect();
-            return Err(format!("Codex 订阅出图失败：{tail}"));
+            crate::core::logger::error(
+                "codex",
+                format!("codex exec exited {}: stdout={} | stderr={}", output.status, stdout, stderr),
+            );
+            // 优先从 stdout JSON 事件中提取精准的 turn.failed / error 消息，屏蔽无关 MCP/skills 启动日志
+            let json_err = stdout.lines().rev().find_map(|line| {
+                let val = serde_json::from_str::<Value>(line).ok()?;
+                let kind = val.get("type")?.as_str()?;
+                if kind == "turn.failed" {
+                    val.pointer("/error/message").and_then(|v| v.as_str()).map(str::to_string)
+                } else if kind == "error" {
+                    val.get("message").and_then(|v| v.as_str()).map(str::to_string)
+                } else {
+                    None
+                }
+            });
+            let msg = json_err.unwrap_or_else(|| {
+                let detail = if !stderr.is_empty() { &stderr } else { &stdout };
+                detail
+                    .chars()
+                    .rev()
+                    .take(300)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect()
+            });
+            return Err(format!("Codex 订阅出图失败：{msg}"));
         }
 
         let thread_id = extract_codex_thread_id(&stdout)
