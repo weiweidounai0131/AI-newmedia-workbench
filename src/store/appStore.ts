@@ -77,6 +77,7 @@ export interface SettingsSummary {
 }
 
 export type LibKind = 'x' | 'w' | 'i';
+export type SucaiTab = 'overview' | '选题' | '创意' | '洗稿' | '图片';
 export interface LibFile {
   folder: '选题' | '创意' | '洗稿' | '图片';
   name: string;
@@ -149,6 +150,7 @@ export interface AppState {
   workflow: WorkflowStatus;
   settings: SettingsSummary | null;
   lib: LibFile[];
+  sucaiTab: SucaiTab;
   librarySetupRequested: boolean;
   xigaoTable: XigaoTableRecord[];
   creativeTable: CreativeTableRecord[];
@@ -356,6 +358,7 @@ const initialState: AppState = {
   workflow: initialWorkflow(),
   settings: null,
   lib: [],
+  sucaiTab: 'overview',
   librarySetupRequested: false,
   xigaoTable: initialXigaoTable(),
   creativeTable: initialCreativeTable(),
@@ -463,6 +466,10 @@ export function useApp<T>(selector: (s: AppState) => T): T {
 
 export function setView(view: string): void {
   setState({ view });
+}
+
+export function setSucaiTab(sucaiTab: SucaiTab): void {
+  setState({ sucaiTab });
 }
 
 export function toggleTheme(): void {

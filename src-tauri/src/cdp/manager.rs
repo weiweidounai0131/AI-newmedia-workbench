@@ -337,7 +337,7 @@ async fn check_risk_message(session: &CdpSession) -> Option<String> {
     None
 }
 
-/// 通过平台官方同源接口校验真实登录态（彻底杜绝小红书游客 web_session 与信息流头像误判）
+/// 通过平台官方同源接口校验真实登录态（小红书 /user/me 区分游客；抖音依赖强登录 Cookie + 弹窗消失）
 async fn probe_api_logged_in(session: &CdpSession, platform: PlatformKey) -> Option<bool> {
     match platform {
         PlatformKey::Xhs => {
@@ -364,23 +364,26 @@ async fn probe_api_logged_in(session: &CdpSession, platform: PlatformKey) -> Opt
             }
         }
         PlatformKey::Douyin => {
+            // 抖音 /aweme/v1/web/user/profile/self/ 需要 a_bogus 签名，未带签名会返回空体；
+            // 改用护照/登录态检测：仅在明确拿到 uid 时返回 Some(true)，否则返回 None 交由强 Cookie + DOM 探针判定，绝不误杀！
             let js = r#"(async () => {
               try {
                 if (!location.hostname.includes('douyin.com')) return null;
-                const resp = await fetch('https://www.douyin.com/aweme/v1/web/user/profile/self/', {
+                const resp = await fetch('https://www.douyin.com/passport/web/account/info/', {
                   credentials: 'include',
                   headers: { 'accept': 'application/json' }
                 });
                 if (!resp.ok) return null;
                 const j = await resp.json();
-                const u = j && j.user;
-                return Boolean(u && (u.uid || u.sec_uid));
+                const d = j && j.data;
+                if (d && (d.user_id_str || d.user_id || d.sec_user_id)) return true;
+                return null;
               } catch (_) {
                 return null;
               }
             })()"#;
             match session.eval_json(js).await {
-                Ok(Value::Bool(b)) => Some(b),
+                Ok(Value::Bool(true)) => Some(true),
                 _ => None,
             }
         }
@@ -394,10 +397,11 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
         return false;
     }
 
-    // 1. 最高权威：同源官方 /user/me 接口判定（直接区分游客与真实登录）
+    // 1. 同源接口校验（小红书可精确区分游客/已登录；抖音命中 passport info 直接确认为 true）
     if let Some(api_logged) = probe_api_logged_in(session, platform).await {
         if api_logged {
             set_verified_marker(platform);
+            crate::core::logger::info("cdp", format!("{} login verified via api", platform.key()));
             return true;
         } else {
             clear_verified_marker(platform);
@@ -405,7 +409,15 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
         }
     }
 
-    // 2. 其次页面精确 DOM 探针（仅匹配本人头像且无登录按钮/无登录弹窗）
+    // 2. 抖音强登录 Cookie 判定：抖音绝不给游客下发 sessionid/sessionid_ss/sid_tt/sid_guard，
+    // 只要这些强认证 Cookie 已经种下，即视为登录成功（避免扫码后弹窗过渡动画阻塞判定）
+    if platform == PlatformKey::Douyin {
+        set_verified_marker(platform);
+        crate::core::logger::info("cdp", "douyin login verified via auth cookies");
+        return true;
+    }
+
+    // 3. 页面精确 DOM 探针
     match probe_dom_logged_in(session, platform).await {
         Some(true) => {
             set_verified_marker(platform);
@@ -415,14 +427,7 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
             clear_verified_marker(platform);
             false
         }
-        None => {
-            // 小红书游客也有 web_session，无法确认时绝不盲信
-            if platform == PlatformKey::Xhs {
-                false
-            } else {
-                has_verified_marker(platform)
-            }
-        }
+        None => false,
     }
 }
 
