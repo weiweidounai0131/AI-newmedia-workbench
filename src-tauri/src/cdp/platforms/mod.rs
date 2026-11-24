@@ -127,7 +127,9 @@ impl PlatformKey {
     pub fn search_api_hints(&self) -> &'static [&'static str] {
         match self {
             Self::Douyin => &[
+                "/aweme/v1/web/general/search/stream/",
                 "/aweme/v1/web/general/search/single/",
+                "/aweme/v1/web/general/search/",
                 "/aweme/v1/web/search/item/",
             ],
             Self::Xhs => &["/api/sns/web/v1/search/notes"],
@@ -162,23 +164,46 @@ impl PlatformKey {
             })()"#,
             Self::Douyin => r#"(() => {
               const out = [];
-              const nodes = document.querySelectorAll('[data-e2e="scroll-list"] li, .search-result-card, li[class*="SwitchTab"]');
+              const seen = new Set();
+              const nodes = document.querySelectorAll('li[id^="waterfall_item_"], [data-e2e="scroll-list"] li, .search-result-card, [data-e2e="search-result-card"]');
               for (const n of nodes) {
-                const a = n.querySelector('a[href*="/video/"]') || n.querySelector('a');
-                const href = a ? a.getAttribute('href') : '';
-                const titleEl = n.querySelector('[class*="title"], .video-title, .desc');
-                const title = titleEl ? titleEl.textContent.trim() : '';
-                const authorEl = n.querySelector('[class*="author"], [class*="nickname"]');
-                const likeEl = n.querySelector('[class*="like"], [class*="count"]');
-                if (!title) continue;
+                const a = n.querySelector('a[href*="/video/"]') || n.querySelector('a[href*="/note/"]') || n.querySelector('a');
+                const href = a ? (a.getAttribute('href') || '') : '';
+                const idAttr = (n.getAttribute('id') || '').replace('waterfall_item_', '');
+                let url = href ? (href.startsWith('http') ? href : 'https://www.douyin.com' + href) : '';
+                if (!url && /^\d{15,22}$/.test(idAttr)) url = 'https://www.douyin.com/video/' + idAttr;
+                const titleEl = n.querySelector('[class*="title"], [class*="desc"], p, h2, h3');
+                const img = n.querySelector('img[alt]');
+                const title = ((titleEl && titleEl.textContent) || (img && img.getAttribute('alt')) || '').replace(/\s+/g, ' ').trim();
+                const authorEl = n.querySelector('[class*="author"], [class*="nickname"], [class*="name"]');
+                const likeEl = n.querySelector('[class*="like"], [class*="count"], [class*="digg"]');
+                if (!title || title.length < 2 || seen.has(title)) continue;
+                seen.add(title);
                 out.push({
-                  t: title,
+                  t: title.slice(0, 120),
                   l: likeEl ? likeEl.textContent.trim() : '—',
                   c: '—',
                   tags: [],
-                  url: href ? (href.startsWith('http') ? href : 'https://www.douyin.com' + href) : '',
+                  url,
                   nickname: authorEl ? authorEl.textContent.trim() : ''
                 });
+              }
+              if (out.length === 0) {
+                for (const a of document.querySelectorAll('a[href*="/video/"]')) {
+                  const href = a.getAttribute('href') || '';
+                  const card = a.closest('li, article, div') || a;
+                  const title = (a.getAttribute('title') || card.innerText || '').split('\n').map(s => s.trim()).find(s => s.length >= 4) || '';
+                  if (!title || seen.has(title)) continue;
+                  seen.add(title);
+                  out.push({
+                    t: title.slice(0, 120),
+                    l: '—',
+                    c: '—',
+                    tags: [],
+                    url: href.startsWith('http') ? href : 'https://www.douyin.com' + href,
+                    nickname: ''
+                  });
+                }
               }
               return out.slice(0, 30);
             })()"#,
@@ -332,6 +357,41 @@ fn parse_xhs_search(payload: &Value) -> (Vec<SearchItem>, Option<String>) {
     (items, None)
 }
 
+fn push_douyin_aweme(info: &Value, items: &mut Vec<SearchItem>) {
+    let title = info
+        .get("desc")
+        .or_else(|| info.get("item_title"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if title.is_empty() {
+        return;
+    }
+    let stat = info.get("statistics");
+    let author = info.get("author");
+    let aid = info
+        .get("aweme_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    items.push(SearchItem {
+        t: title.to_string(),
+        l: fmt_count(stat.and_then(|s| s.get("digg_count"))),
+        c: fmt_count(stat.and_then(|s| s.get("comment_count"))),
+        tags: vec![],
+        url: if !aid.is_empty() {
+            format!("https://www.douyin.com/video/{aid}")
+        } else {
+            String::new()
+        },
+        nickname: author
+            .and_then(|a| a.get("nickname"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string(),
+    });
+}
+
 fn parse_douyin_search(payload: &Value) -> (Vec<SearchItem>, Option<String>) {
     let status = payload.get("status_code").and_then(|v| v.as_i64());
     if !matches!(status, None | Some(0)) {
@@ -342,42 +402,25 @@ fn parse_douyin_search(payload: &Value) -> (Vec<SearchItem>, Option<String>) {
     }
 
     let mut items = Vec::new();
+    // 1. 标准 /single/ 与 /stream/ 结构：data[].aweme_info 或 data[].aweme_mix_info / sub_card_list
     if let Some(arr) = payload.get("data").and_then(|v| v.as_array()) {
         for it in arr {
-            let Some(info) = it.get("aweme_info") else {
-                continue;
-            };
-            let title = info
-                .get("desc")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .unwrap_or("");
-            if title.is_empty() {
-                continue;
+            if let Some(info) = it.get("aweme_info") {
+                push_douyin_aweme(info, &mut items);
             }
-            let stat = info.get("statistics");
-            let author = info.get("author");
-            let aid = info
-                .get("aweme_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            items.push(SearchItem {
-                t: title.to_string(),
-                l: fmt_count(stat.and_then(|s| s.get("digg_count"))),
-                c: fmt_count(stat.and_then(|s| s.get("comment_count"))),
-                tags: vec![],
-                url: if !aid.is_empty() {
-                    format!("https://www.douyin.com/video/{aid}")
-                } else {
-                    String::new()
-                },
-                nickname: author
-                    .and_then(|a| a.get("nickname"))
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .unwrap_or("")
-                    .to_string(),
-            });
+            if let Some(sub) = it.get("sub_card_list").and_then(|v| v.as_array()) {
+                for s in sub {
+                    if let Some(info) = s.get("aweme_info") {
+                        push_douyin_aweme(info, &mut items);
+                    }
+                }
+            }
+        }
+    }
+    // 2. /search/item/ 结构：aweme_list[]
+    if let Some(arr) = payload.get("aweme_list").and_then(|v| v.as_array()) {
+        for info in arr {
+            push_douyin_aweme(info, &mut items);
         }
     }
     (items, None)

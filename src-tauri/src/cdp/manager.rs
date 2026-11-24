@@ -412,8 +412,10 @@ async fn is_logged_in_live(session: &CdpSession, platform: PlatformKey) -> bool 
     // 2. 抖音强登录 Cookie 判定：抖音绝不给游客下发 sessionid/sessionid_ss/sid_tt/sid_guard，
     // 只要这些强认证 Cookie 已经种下，即视为登录成功（避免扫码后弹窗过渡动画阻塞判定）
     if platform == PlatformKey::Douyin {
-        set_verified_marker(platform);
-        crate::core::logger::info("cdp", "douyin login verified via auth cookies");
+        if !has_verified_marker(platform) {
+            set_verified_marker(platform);
+            crate::core::logger::info("cdp", "douyin login verified via auth cookies");
+        }
         return true;
     }
 
@@ -658,7 +660,9 @@ pub async fn search_platform(
     let mut rx = session.subscribe();
     let hints = platform.search_api_hints();
     let target_url = platform.search_url(kw);
+    crate::core::logger::info("cdp:search", format!("start search platform={} kw={kw}", platform.key()));
     if let Err(e) = session.navigate(&target_url).await {
+        crate::core::logger::error("cdp:search", format!("navigate failed: {e}"));
         return SearchResp {
             items: vec![],
             live: false,
@@ -669,10 +673,54 @@ pub async fn search_platform(
 
     let mut captured: Vec<SearchItem> = Vec::new();
     let mut risk_err: Option<String> = None;
+    let mut watched_reqs: HashMap<String, String> = HashMap::new();
     let deadline = Instant::now() + Duration::from_secs(16);
 
+    // 解析单段或多段流式 JSON（兼容抖音 /general/search/stream/ 分块拼接 JSON）
+    let parse_body_into = |body_str: &str,
+                           captured: &mut Vec<SearchItem>,
+                           risk_err: &mut Option<String>| {
+        if let Ok(payload) = serde_json::from_str::<Value>(body_str) {
+            let (items, err) = parse_search_payload(platform, &payload);
+            if let Some(e) = err {
+                *risk_err = Some(e);
+            }
+            if !items.is_empty() {
+                captured.extend(items);
+            }
+            return;
+        }
+        // 流式多段 JSON 或带十六进制分块长度前缀的响应体：逐个扫描 JSON 对象
+        let stream = serde_json::Deserializer::from_str(body_str).into_iter::<Value>();
+        for val in stream.flatten() {
+            let (items, err) = parse_search_payload(platform, &val);
+            if let Some(e) = err {
+                *risk_err = Some(e);
+            }
+            if !items.is_empty() {
+                captured.extend(items);
+            }
+        }
+        if captured.is_empty() {
+            for line in body_str.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('{') {
+                    if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                        let (items, err) = parse_search_payload(platform, &val);
+                        if let Some(e) = err {
+                            *risk_err = Some(e);
+                        }
+                        if !items.is_empty() {
+                            captured.extend(items);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
     while Instant::now() < deadline && captured.is_empty() && risk_err.is_none() {
-        match tokio::time::timeout(Duration::from_millis(600), rx.recv()).await {
+        match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
             Ok(Ok(ev)) if ev.method == "Network.responseReceived" => {
                 let url = ev
                     .params
@@ -683,24 +731,41 @@ pub async fn search_platform(
                 if !hints.iter().any(|h| url.contains(h)) {
                     continue;
                 }
+                if let Some(req_id) = ev.params.get("requestId").and_then(|v| v.as_str()) {
+                    crate::core::logger::info("cdp:search", format!("matched api url={}", url.chars().take(120).collect::<String>()));
+                    watched_reqs.insert(req_id.to_string(), url.to_string());
+                }
+            }
+            Ok(Ok(ev)) if ev.method == "Network.loadingFinished" => {
                 let Some(req_id) = ev.params.get("requestId").and_then(|v| v.as_str()) else {
                     continue;
                 };
-                // 略等响应体落齐
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                if let Ok(body_str) = session.get_response_body(req_id).await {
-                    if let Ok(payload) = serde_json::from_str::<Value>(&body_str) {
-                        let (items, err) = parse_search_payload(platform, &payload);
-                        if let Some(e) = err {
-                            risk_err = Some(e);
+                if watched_reqs.remove(req_id).is_some() {
+                    match session.get_response_body(req_id).await {
+                        Ok(body_str) => {
+                            let before = captured.len();
+                            parse_body_into(&body_str, &mut captured, &mut risk_err);
+                            crate::core::logger::info(
+                                "cdp:search",
+                                format!("api body len={} parsed_items={}", body_str.len(), captured.len() - before),
+                            );
                         }
-                        if !items.is_empty() {
-                            captured.extend(items);
+                        Err(e) => {
+                            crate::core::logger::warn("cdp:search", format!("getResponseBody failed: {e}"));
                         }
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    // 若有已匹配但未等到 loadingFinished 的请求，兜底尝试读取一次响应体
+    if captured.is_empty() && !watched_reqs.is_empty() {
+        for (req_id, _) in watched_reqs.drain() {
+            if let Ok(body_str) = session.get_response_body(&req_id).await {
+                parse_body_into(&body_str, &mut captured, &mut risk_err);
+            }
         }
     }
 
@@ -718,21 +783,30 @@ pub async fn search_platform(
 
     // API 拦截未命中时，使用页面 DOM 兜底抽取
     if captured.is_empty() {
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         if let Ok(val) = session.eval_json(platform.dom_extract_js()).await {
             if let Ok(dom_items) = serde_json::from_value::<Vec<SearchItem>>(val) {
-                captured.extend(dom_items.into_iter().filter(|i| !i.t.is_empty()));
+                let valid: Vec<SearchItem> = dom_items.into_iter().filter(|i| !i.t.is_empty()).collect();
+                crate::core::logger::info("cdp:search", format!("dom fallback extracted {} items", valid.len()));
+                captured.extend(valid);
             }
         }
     }
 
     if captured.is_empty() {
+        let diag = session
+            .eval_json("JSON.stringify({title: document.title, url: location.href, textLen: (document.body?.innerText || '').length})")
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        crate::core::logger::warn("cdp:search", format!("no_result platform={} diag={diag}", platform.key()));
         return SearchResp {
             items: vec![],
             live: false,
             reason: Some("no_result".into()),
             message: Some(format!(
-                "「{}」未抓到结果（可能登录态过期或触发验证码，请检查浏览器窗口）",
+                "「{}」未抓到结果（可能触发验证码或页面结构变化，请稍后重试）",
                 platform.name()
             )),
         };
