@@ -316,23 +316,50 @@ pub async fn start_login_qr(platform_name: &str) -> Result<QrLoginResp, String> 
         .await;
     tokio::time::sleep(Duration::from_millis(1200)).await;
 
-    // 优先读取二维码 data:image src，其次按元素坐标截图
+    // 优先精准读取二维码：严格校验近似正方形（过滤横幅/广告图），支持 data:image / canvas 无损直读
     let qr_sels_json = serde_json::to_string(platform.qr_selectors()).unwrap_or_default();
     let mut qr_data: Option<String> = None;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(12);
     while Instant::now() < deadline {
         if let Ok(val) = session
             .eval_json(&format!(
                 r#"(() => {{
-                  for (const sel of {qr_sels_json}) {{
-                    const el = document.querySelector(sel);
-                    if (!el) continue;
+                  const isSquareQr = (r) => {{
+                    if (!r || r.width < 100 || r.height < 100 || r.width > 420 || r.height > 420) return false;
+                    const ratio = r.width / r.height;
+                    return ratio >= 0.78 && ratio <= 1.28;
+                  }};
+                  const extract = (el) => {{
+                    if (!el) return null;
+                    const s = getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return null;
                     const r = el.getBoundingClientRect();
-                    if (r.width < 40 || r.height < 40) continue;
+                    if (!isSquareQr(r)) return null;
                     if (el.tagName === 'IMG' && el.src && el.src.startsWith('data:image')) {{
                       return {{ dataUrl: el.src }};
                     }}
-                    return {{ rect: {{ x: r.x, y: r.y, width: r.width, height: r.height }} }};
+                    if (el.tagName === 'CANVAS') {{
+                      try {{
+                        const d = el.toDataURL('image/png');
+                        if (d && d.startsWith('data:image') && d.length > 500) return {{ dataUrl: d }};
+                      }} catch (_) {{}}
+                    }}
+                    return {{ rect: {{ x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height }} }};
+                  }};
+                  for (const sel of {qr_sels_json}) {{
+                    const nodes = document.querySelectorAll(sel);
+                    for (const el of nodes) {{
+                      const hit = extract(el);
+                      if (hit) return hit;
+                    }}
+                  }}
+                  // 兜底：扫描页面上所有近似正方形的 data:image 或 canvas 二维码
+                  for (const el of document.querySelectorAll("img[src^='data:image'], canvas")) {{
+                    const r = el.getBoundingClientRect();
+                    if (r.width >= 110 && r.width <= 360 && Math.abs(r.width - r.height) <= 24) {{
+                      const hit = extract(el);
+                      if (hit) return hit;
+                    }}
                   }}
                   return null;
                 }})()"#
@@ -348,7 +375,7 @@ pub async fn start_login_qr(platform_name: &str) -> Result<QrLoginResp, String> 
                 let y = rect.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let w = rect.get("width").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let h = rect.get("height").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                if w >= 40.0 && h >= 40.0 {
+                if w >= 100.0 && h >= 100.0 {
                     if let Ok(b64) = session.capture_clip_png(x, y, w, h).await {
                         qr_data = Some(format!("data:image/png;base64,{b64}"));
                         break;

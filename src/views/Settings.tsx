@@ -371,15 +371,20 @@ export default function Settings() {
   }
 
   async function verify(cap: CapId) {
+    if (verifying[cap]) return;
     setVerifying((s) => ({ ...s, [cap]: true }));
     try {
       const r = await api.verifyCap(cap);
+      if (r.settings) {
+        setSettings(r.settings);
+      } else {
+        await api.getSettings().then(setSettings).catch(() => {});
+      }
       if (r.ok) {
         toast(`${CAPABILITY_TITLES[cap]} 验证通过（${r.model}）`, 'success');
       } else {
         toast(`${CAPABILITY_TITLES[cap]} 验证失败：${r.error}`, 'danger');
       }
-      await api.getSettings().then(setSettings);
     } catch (e: any) {
       toast(e?.message || '验证失败', 'danger');
     } finally {
@@ -522,7 +527,18 @@ export default function Settings() {
                         </label>
                         <div className="capability-config-status">
                           <span className={`ai-model-status ${configStatus(config) === '未配置' ? 'empty' : config.verified ? 'verified' : 'saved'}`}>{configStatus(config)}</span>
-                          {config.active && <Button size="sm" variant="bordered" isLoading={verifying[configModalCap]} isDisabled={!config.configured} onPress={() => void verify(configModalCap)}>验证</Button>}
+                          {config.active && (
+                            <Button
+                              key={verifying[configModalCap] ? 'verifying' : 'idle'}
+                              size="sm"
+                              variant="bordered"
+                              isLoading={Boolean(verifying[configModalCap])}
+                              isDisabled={!config.configured || Boolean(verifying[configModalCap])}
+                              onPress={() => void verify(configModalCap)}
+                            >
+                              {verifying[configModalCap] ? '验证中' : '验证'}
+                            </Button>
+                          )}
                         </div>
                         <div className="capability-config-actions">
                           <Button size="sm" variant="light" onPress={() => startEditCapabilityConfig(configModalCap, config)}>编辑</Button>
@@ -872,7 +888,17 @@ export default function Settings() {
                     <img
                       src={qrModal.qr}
                       alt="登录二维码"
-                      style={{ width: 180, height: 180, margin: '0 auto', borderRadius: 8, border: '1px solid var(--line)' }}
+                      style={{
+                        width: 210,
+                        height: 210,
+                        objectFit: 'contain',
+                        background: '#ffffff',
+                        padding: 8,
+                        display: 'block',
+                        margin: '0 auto',
+                        borderRadius: 10,
+                        border: '1px solid var(--border)',
+                      }}
                     />
                     <div className="tiny" style={{ marginTop: 12, color: 'var(--text-3)' }}>
                       请使用「{qrModal.platform}」App 扫描上方二维码

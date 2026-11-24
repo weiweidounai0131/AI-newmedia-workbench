@@ -79,19 +79,25 @@ impl PlatformKey {
     pub fn qr_selectors(&self) -> &'static [&'static str] {
         match self {
             Self::Douyin => &[
-                "#login-panel-new img",
                 ".web-login-scan-code__content__qrcode-wrapper img",
-                ".web-login-scan-code img",
+                ".web-login-scan-code__content__qrcode-wrapper canvas",
+                ".web-login-scan-code img[src^='data:image']",
+                ".web-login-scan-code canvas",
+                "img[aria-label*='二维码']",
+                "img[alt*='二维码']",
                 "[class*='qrcode'] img",
-                "#login-panel-new",
+                "[class*='qrcode'] canvas",
+                "[class*='qr-code'] img",
+                "[class*='qr-code'] canvas",
             ],
             Self::Xhs => &[
                 ".login-container .qrcode-img",
+                "img.qrcode-img",
                 ".qrcode-img",
                 ".login-container img[src^='data:image']",
-                "img.qrcode-img",
-                ".login-box-container .qrcode",
-                ".login-container",
+                ".login-box-container img[src^='data:image']",
+                "[class*='qrcode'] img",
+                "[class*='qrcode'] canvas",
             ],
         }
     }

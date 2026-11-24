@@ -596,12 +596,12 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 /* 图片：桌面图标视图，一排四张中型预览图。 */
 .img-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px 18px;padding:8px 4px}
 @media(max-width:640px){.img-grid{grid-template-columns:repeat(2,1fr)}}
-.img-cell{display:flex;flex-direction:column;gap:7px;cursor:pointer;text-align:left;padding:0;border:0;background:transparent;color:inherit;min-width:0}
+.img-cell{display:flex;flex-direction:column;gap:7px;cursor:pointer;text-align:left;padding:0;border:0;background:transparent;color:inherit;min-width:0;width:100%;max-width:100%;overflow:hidden}
 .img-cell:hover .img-thumb-img{transform:scale(1.02);border-color:var(--accent-line)}
-.img-thumb{aspect-ratio:1/1;border:1px solid var(--border);border-radius:var(--radius-sm);background:repeating-linear-gradient(135deg,var(--surface-2),var(--surface-2) 10px,var(--surface) 10px,var(--surface) 20px);display:grid;place-items:center;color:var(--text-3);overflow:hidden}
+.img-thumb{aspect-ratio:1/1;width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);background:repeating-linear-gradient(135deg,var(--surface-2),var(--surface-2) 10px,var(--surface) 10px,var(--surface) 20px);display:grid;place-items:center;color:var(--text-3);overflow:hidden}
 .img-thumb svg{width:34px;height:34px;opacity:.45}
 .img-thumb-img{aspect-ratio:1/1;width:100%;object-fit:cover;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);box-shadow:0 2px 5px rgba(0,0,0,.08);transition:transform .16s var(--ease),border-color .16s var(--ease)}
-.img-name{font-size:13px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+.img-name{display:block;width:100%;max-width:100%;font-size:13px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
 .img-date{font-size:11px}
 .img-foot{display:flex;align-items:center;justify-content:center;gap:6px}
 .img-foot .icon-btn{margin-left:0;width:24px;height:24px}
@@ -771,4 +771,6 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
   height:100%;border-radius:999px;
   background:linear-gradient(90deg,var(--accent),#38bdf8);
 }
+.capability-config-status{display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:fit-content}
+.capability-config-status .ai-model-status{white-space:nowrap;flex-shrink:0;overflow:visible}
 

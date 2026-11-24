@@ -61,6 +61,7 @@ export interface VerifyResp {
   ok: boolean;
   model?: string;
   error?: string;
+  settings?: SettingsSummary;
 }
 
 export interface RuntimeSetupResp {
@@ -313,15 +314,27 @@ export const api = {
     tauriInvoke<{ out?: string; model?: string; error?: string }>('creative_generate', { req: body }),
   creativeOptimize: (body: { content: string; hint: string }) =>
     tauriInvoke<{ out?: string; model?: string; error?: string }>('creative_optimize', { req: body }),
-  chutu: (body: any) =>
-    tauriInvoke<ChutuResp>('chutu_generate', {
+  chutu: (body: any) => {
+    const rawRefs = Array.isArray(body?.refImgs)
+      ? body.refImgs
+      : body?.refImg
+        ? [{ type: 'image', data: body.refImg, mime: 'image/png' }]
+        : [];
+    return tauriInvoke<ChutuResp>('chutu_generate', {
       req: {
         prompt: body?.prompt || '',
+        provider: body?.provider || 'api',
         size: body?.size,
         quality: body?.quality,
-        refImg: body?.refImg || body?.referenceImage,
+        optimizeHint: body?.optimizeHint,
+        refImgs: rawRefs.map((item: any) => ({
+          type: item?.type || 'image',
+          data: item?.data || '',
+          mime: item?.mime || 'image/png',
+        })),
       },
-    }),
+    });
+  },
   chutuProviders: () =>
     tauriInvoke<{ codex: { available: boolean; message: string; version?: string }; api: { available: boolean; message: string } }>(
       'chutu_providers',

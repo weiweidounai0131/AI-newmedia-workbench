@@ -443,31 +443,41 @@ pub async fn generate_image(
     prompt: &str,
     size: Option<&str>,
     quality: Option<&str>,
-    ref_image_data_url: Option<&str>,
+    ref_imgs: &[VisionPart],
 ) -> Result<ImageResult, String> {
     let snapshot = settings::resolve_request(CapId::Image, None)?;
     if snapshot.provider.protocol != ProviderProtocol::OpenaiChatCompletions {
         return Err("当前出图槽位仅支持 OpenAI Images 兼容协议".into());
     }
-    let client = build_http_client(180)?;
-    let size_val = size.unwrap_or("1024x1024");
-    let quality_val = quality.unwrap_or("medium");
+    let client = build_http_client(300)?;
+    let size_val = size.unwrap_or("1024x1536");
+    let quality_val = quality.unwrap_or("auto");
 
-    let (resp, used_edit) = if let Some(ref_img) = ref_image_data_url.filter(|s| !s.trim().is_empty()) {
-        let raw_b64 = ref_img.split(',').next_back().unwrap_or("");
-        let bytes = B64
-            .decode(raw_b64)
-            .map_err(|e| format!("参考图解码失败：{e}"))?;
-        let part = Part::bytes(bytes)
-            .file_name("reference.png")
-            .mime_str("image/png")
-            .map_err(|e| e.to_string())?;
-        let form = Form::new()
+    let (resp, used_edit) = if !ref_imgs.is_empty() {
+        let mut form = Form::new()
             .text("model", snapshot.model.clone())
             .text("prompt", prompt.to_string())
             .text("size", size_val.to_string())
-            .text("quality", quality_val.to_string())
-            .part("image", part);
+            .text("quality", quality_val.to_string());
+        for (idx, ref_img) in ref_imgs.iter().take(14).enumerate() {
+            let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
+            let bytes = B64
+                .decode(raw_b64)
+                .map_err(|e| format!("第 {} 张参考图解码失败：{e}", idx + 1))?;
+            let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+            let ext = if mime.contains("jpeg") || mime.contains("jpg") {
+                "jpg"
+            } else if mime.contains("webp") {
+                "webp"
+            } else {
+                "png"
+            };
+            let part = Part::bytes(bytes)
+                .file_name(format!("reference-{}.{ext}", idx + 1))
+                .mime_str(mime)
+                .map_err(|e| e.to_string())?;
+            form = form.part("image", part);
+        }
         let r = client
             .post(endpoint(&snapshot.provider.base_url, "/images/edits"))
             .bearer_auth(&snapshot.api_key)
@@ -525,6 +535,230 @@ pub async fn generate_image(
     })
 }
 
+fn enriched_child_path() -> String {
+    let base = std::env::var("PATH").unwrap_or_default();
+    let mut extras: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        extras.push("/opt/homebrew/bin".into());
+        extras.push("/usr/local/bin".into());
+    }
+    if let Some(home) = dirs::home_dir() {
+        extras.push(home.join(".local").join("bin").to_string_lossy().to_string());
+        extras.push(home.join(".codex").join("bin").to_string_lossy().to_string());
+        extras.push(home.join(".npm-global").join("bin").to_string_lossy().to_string());
+    }
+    if !base.is_empty() {
+        extras.push(base);
+    }
+    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    extras.join(sep)
+}
+
+/// 识别本机 Codex CLI 路径（兼容 Finder 启动时丢失终端 PATH 的 macOS 场景与 Windows 场景）
+async fn codex_cli_path() -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(custom) = std::env::var("NEWMEDIA_CODEX_CLI") {
+        let t = custom.trim();
+        if !t.is_empty() {
+            candidates.push(std::path::PathBuf::from(t));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(std::path::PathBuf::from(
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+        ));
+        candidates.push(std::path::PathBuf::from("/opt/homebrew/bin/codex"));
+        candidates.push(std::path::PathBuf::from("/usr/local/bin/codex"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        let bin = if cfg!(target_os = "windows") {
+            "codex.exe"
+        } else {
+            "codex"
+        };
+        candidates.push(home.join(".local").join("bin").join(bin));
+        candidates.push(home.join(".codex").join("bin").join(bin));
+        candidates.push(home.join(".npm-global").join("bin").join(bin));
+    }
+    for path in candidates {
+        if path.is_file() {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    let probe = tokio::process::Command::new("codex")
+        .arg("--version")
+        .output()
+        .await;
+    if probe.map(|o| o.status.success()).unwrap_or(false) {
+        return Some("codex".to_string());
+    }
+    None
+}
+
+fn codex_aspect(size: Option<&str>) -> &'static str {
+    match size {
+        Some("1024x1024") => "1:1",
+        Some("1536x1024") => "3:2 横版",
+        _ => "2:3 竖版",
+    }
+}
+
+fn extract_codex_thread_id(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        if let Ok(val) = serde_json::from_str::<Value>(line) {
+            if val.get("type").and_then(|v| v.as_str()) == Some("thread.started") {
+                if let Some(tid) = val.get("thread_id").and_then(|v| v.as_str()) {
+                    return Some(tid.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 100% 还原旧版本机 Codex CLI 订阅出图逻辑（无需 API Key）
+pub async fn generate_codex_image(
+    prompt: &str,
+    size: Option<&str>,
+    ref_imgs: &[VisionPart],
+) -> Result<ImageResult, String> {
+    let status = chutu_providers_status().await;
+    if !status.codex.available {
+        return Err(status.codex.message);
+    }
+    let cli = codex_cli_path()
+        .await
+        .ok_or_else(|| "未检测到可用的 Codex CLI 或订阅登录".to_string())?;
+    let home = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let generated_root = home.join(".codex").join("generated_images");
+    std::fs::create_dir_all(&generated_root).map_err(|e| e.to_string())?;
+
+    let temp_dir = std::env::temp_dir().join(format!("newmedia-codex-img-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let result: Result<ImageResult, String> = async {
+        let mut ref_paths = Vec::new();
+        for (idx, ref_img) in ref_imgs.iter().take(14).enumerate() {
+            let raw_b64 = ref_img.data.split(',').next_back().unwrap_or("");
+            let bytes = B64
+                .decode(raw_b64)
+                .map_err(|e| format!("第 {} 张参考图解码失败：{e}", idx + 1))?;
+            let mime = ref_img.mime.as_deref().unwrap_or("image/png");
+            let ext = if mime.contains("jpeg") || mime.contains("jpg") {
+                "jpg"
+            } else if mime.contains("webp") {
+                "webp"
+            } else {
+                "png"
+            };
+            let file = temp_dir.join(format!("reference-{}.{ext}", idx + 1));
+            std::fs::write(&file, bytes).map_err(|e| format!("写入临时参考图失败：{e}"))?;
+            ref_paths.push(file);
+        }
+
+        let model = std::env::var("NEWMEDIA_CODEX_IMAGEGEN_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "gpt-5.5".to_string());
+
+        let mut cmd = tokio::process::Command::new(&cli);
+        cmd.env("PATH", enriched_child_path());
+        cmd.args([
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "danger-full-access",
+            "-C",
+            &temp_dir.to_string_lossy(),
+            "--add-dir",
+            &generated_root.to_string_lossy(),
+            "--model",
+            &model,
+        ]);
+        for rp in &ref_paths {
+            cmd.arg("-i").arg(rp);
+        }
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 Codex CLI 失败：{e}"))?;
+
+        let prefix = if ref_paths.is_empty() {
+            "$imagegen"
+        } else {
+            "$imagegen Edit the attached reference image(s):"
+        };
+        let full_prompt = format!("{prefix} {prompt}\nAspect ratio: {}.", codex_aspect(size));
+
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(full_prompt.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+        }
+
+        let output = tokio::time::timeout(Duration::from_secs(300), child.wait_with_output())
+            .await
+            .map_err(|_| "Codex 订阅出图超时（5 分钟）".to_string())?
+            .map_err(|e| format!("执行 Codex CLI 失败：{e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !output.status.success() {
+            let detail = if !stderr.is_empty() { stderr } else { stdout };
+            let clipped: String = detail.chars().take(400).collect();
+            return Err(format!("Codex 订阅出图失败：{clipped}"));
+        }
+
+        let thread_id = extract_codex_thread_id(&stdout)
+            .ok_or_else(|| "Codex 未返回图片任务标识，无法读取生成文件".to_string())?;
+        let thread_dir = generated_root.join(&thread_id);
+        let mut all_images: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&thread_dir) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let lower = name.to_lowercase();
+                if lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".webp") {
+                    all_images.push(name);
+                }
+            }
+        }
+        all_images.sort();
+        let chosen = all_images
+            .iter()
+            .find(|n| n.starts_with("ig_") || n.starts_with("call_"))
+            .or_else(|| all_images.first())
+            .cloned()
+            .ok_or_else(|| "Codex 已完成，但未在本地写出图片文件".to_string())?;
+
+        let bytes = std::fs::read(thread_dir.join(&chosen))
+            .map_err(|e| format!("读取 Codex 生成图片失败：{e}"))?;
+        let _ = std::fs::remove_dir_all(&thread_dir);
+        if bytes.len() < 1024 {
+            return Err("Codex 返回的图片文件异常".into());
+        }
+
+        Ok(ImageResult {
+            images: vec![ImageOutput {
+                b64: B64.encode(&bytes),
+            }],
+            model: "gpt-image-2（Codex 订阅）".to_string(),
+            used_edit: !ref_paths.is_empty(),
+            provider: "codex".to_string(),
+        })
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    result
+}
+
 pub async fn verify_capability(cap: CapId) -> Result<String, String> {
     let snapshot = settings::resolve_request(cap, None)?;
     match cap {
@@ -567,35 +801,60 @@ pub struct ProviderAvail {
 }
 
 pub async fn chutu_providers_status() -> ChutuProvidersStatus {
-    let api_ok = settings::resolve_request(CapId::Image, None).is_ok();
-    let codex_out = tokio::process::Command::new("codex")
-        .arg("--version")
-        .output()
-        .await;
-    let codex = match codex_out {
-        Ok(out) if out.status.success() => {
-            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            ProviderAvail {
-                available: true,
-                message: format!("已检测到本机 Codex CLI（{ver}）"),
-                version: Some(ver),
-            }
+    let codex = async {
+        let Some(home) = dirs::home_dir() else {
+            return ProviderAvail {
+                available: false,
+                message: "未检测到可用的 Codex CLI 或订阅登录".into(),
+                version: None,
+            };
+        };
+        let auth_path = home.join(".codex").join("auth.json");
+        let auth_ok = std::fs::read_to_string(&auth_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .map(|v| {
+                v.get("auth_mode").and_then(|m| m.as_str()) == Some("chatgpt")
+                    || v.pointer("/tokens/access_token").and_then(|t| t.as_str()).is_some()
+            })
+            .unwrap_or(false);
+        if !auth_ok {
+            return ProviderAvail {
+                available: false,
+                message: "未检测到 Codex 订阅登录，请先在终端完成 Codex 登录".into(),
+                version: None,
+            };
         }
-        _ => ProviderAvail {
-            available: false,
-            message: "未检测到本机 Codex CLI，将默认使用图像 API 出图".into(),
-            version: None,
-        },
-    };
+        let Some(cli) = codex_cli_path().await else {
+            return ProviderAvail {
+                available: false,
+                message: "未检测到可用的 Codex CLI 或订阅登录".into(),
+                version: None,
+            };
+        };
+        let ver = tokio::process::Command::new(&cli)
+            .env("PATH", enriched_child_path())
+            .arg("--version")
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        ProviderAvail {
+            available: true,
+            message: "已检测到本机 Codex 订阅，可直接出图".into(),
+            version: ver,
+        }
+    }
+    .await;
+
     ChutuProvidersStatus {
         codex,
         api: ProviderAvail {
-            available: api_ok,
-            message: if api_ok {
-                "图像 API 已配置".into()
-            } else {
-                "请先在设置页配置出图模型 API Key".into()
-            },
+            available: true,
+            message: "使用设置页已配置的出图 API Key".into(),
             version: None,
         },
     }

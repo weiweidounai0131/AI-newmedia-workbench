@@ -151,6 +151,13 @@ pub struct ProviderRequestSnapshot {
 }
 
 static SETTINGS_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static SECRET_CACHE: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key_id(key_id: &str) -> String {
+    let scope = std::env::var("NEWMEDIA_RS_DATA_DIR").unwrap_or_default();
+    format!("{scope}::{key_id}")
+}
 
 fn settings_file_path() -> Result<PathBuf, String> {
     Ok(resolve_app_data_dir()
@@ -220,32 +227,57 @@ fn decrypt_aes(dir: &Path, stored: &str) -> Option<String> {
 
 pub fn store_secret_key(key_id: &str, plain: &str) -> Result<String, String> {
     let dir = resolve_app_data_dir().map_err(|e| e.to_string())?;
-    if !use_isolated_aes_only() {
+    let marker = if !use_isolated_aes_only() {
         if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key_id) {
             if entry.set_password(plain).is_ok() {
-                return Ok("keyring".to_string());
+                "keyring".to_string()
+            } else {
+                encrypt_aes(&dir, plain)?
             }
+        } else {
+            encrypt_aes(&dir, plain)?
         }
+    } else {
+        encrypt_aes(&dir, plain)?
+    };
+    if let Ok(mut cache) = SECRET_CACHE.lock() {
+        cache.insert(cache_key_id(key_id), plain.to_string());
     }
-    encrypt_aes(&dir, plain)
+    Ok(marker)
 }
 
 pub fn load_secret_key(key_id: &str, marker: &str) -> Option<String> {
-    let dir = resolve_app_data_dir().ok()?;
-    if marker == "keyring" {
-        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key_id) {
-            if let Ok(pwd) = entry.get_password() {
-                if !pwd.trim().is_empty() {
-                    return Some(pwd);
-                }
+    let ck = cache_key_id(key_id);
+    if let Ok(cache) = SECRET_CACHE.lock() {
+        if let Some(val) = cache.get(&ck) {
+            if !val.trim().is_empty() {
+                return Some(val.clone());
             }
         }
-        return None;
     }
-    decrypt_aes(&dir, marker)
+
+    let dir = resolve_app_data_dir().ok()?;
+    let loaded = if marker == "keyring" {
+        keyring::Entry::new(KEYRING_SERVICE, key_id)
+            .ok()
+            .and_then(|entry| entry.get_password().ok())
+            .filter(|pwd| !pwd.trim().is_empty())
+    } else {
+        decrypt_aes(&dir, marker)
+    };
+
+    if let Some(ref val) = loaded {
+        if let Ok(mut cache) = SECRET_CACHE.lock() {
+            cache.insert(ck, val.clone());
+        }
+    }
+    loaded
 }
 
 pub fn delete_secret_key(key_id: &str, marker: Option<&str>) {
+    if let Ok(mut cache) = SECRET_CACHE.lock() {
+        cache.remove(&cache_key_id(key_id));
+    }
     if marker == Some("keyring") {
         if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key_id) {
             let _ = entry.delete_credential();

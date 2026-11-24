@@ -25,6 +25,7 @@ pub struct VerifyCapResponse {
     pub ok: bool,
     pub model: Option<String>,
     pub error: Option<String>,
+    pub settings: Option<SettingsSummary>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,11 +109,13 @@ pub async fn verify_capability(cap: CapId) -> VerifyCapResponse {
             ok: true,
             model: Some(model),
             error: None,
+            settings: settings::get_summary().ok(),
         },
         Err(err) => VerifyCapResponse {
             ok: false,
             model: None,
             error: Some(err),
+            settings: settings::get_summary().ok(),
         },
     }
 }

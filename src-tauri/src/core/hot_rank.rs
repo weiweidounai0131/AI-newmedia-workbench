@@ -2,6 +2,7 @@ use chrono::Local;
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -19,6 +20,7 @@ pub struct HotRankItem {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AllHotRanksResult {
     pub items: HashMap<String, Vec<HotRankItem>>,
     pub failed: Vec<String>,
@@ -46,10 +48,20 @@ fn base_url() -> String {
         .to_string()
 }
 
-fn source_path(platform: &str) -> Option<&'static str> {
+fn primary_source_path(platform: &str) -> Option<&'static str> {
     match platform {
         "抖音" => Some("douyin"),
         "小红书" => Some("rednote"),
+        "微博" => Some("weibo"),
+        "知乎" => Some("zhihu"),
+        _ => None,
+    }
+}
+
+fn uapis_source_type(platform: &str) -> Option<&'static str> {
+    match platform {
+        "抖音" => Some("douyin"),
+        "小红书" => Some("xiaohongshu"),
         "微博" => Some("weibo"),
         "知乎" => Some("zhihu"),
         _ => None,
@@ -67,31 +79,149 @@ fn fallback_link(platform: &str, title: &str) -> String {
     }
 }
 
-fn compact_heat(val: Option<&serde_json::Value>) -> String {
+fn compact_heat(val: Option<&Value>) -> String {
     let Some(v) = val else {
         return String::new();
     };
     if let Some(n) = v.as_f64() {
-        if n >= 1e8 {
-            let s = format!("{:.1}", n / 1e8);
-            return format!("{}亿", s.trim_end_matches(".0"));
-        }
-        if n >= 1e4 {
-            let s = format!("{:.1}", n / 1e4);
-            return format!("{}w", s.trim_end_matches(".0"));
-        }
-        return format!("{}", n as i64);
+        return format_heat_number(n);
     }
     if let Some(s) = v.as_str() {
-        return s.trim().to_string();
+        let trimmed = s.trim();
+        if let Ok(n) = trimmed.parse::<f64>() {
+            return format_heat_number(n);
+        }
+        return trimmed.to_string();
     }
     String::new()
 }
 
+fn format_heat_number(n: f64) -> String {
+    if !n.is_finite() {
+        return String::new();
+    }
+    if n >= 1e8 {
+        let s = format!("{:.1}", n / 1e8);
+        return format!("{}亿", s.trim_end_matches(".0"));
+    }
+    if n >= 1e4 {
+        let s = format!("{:.1}", n / 1e4);
+        return format!("{}w", s.trim_end_matches(".0"));
+    }
+    format!("{}", n as i64)
+}
+
+fn normalize_items(platform: &str, arr: &[Value]) -> Vec<HotRankItem> {
+    let mut items = Vec::with_capacity(20);
+    for raw in arr {
+        let title = raw
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if title.is_empty() {
+            continue;
+        }
+        let tag = raw
+            .get("word_type")
+            .or_else(|| raw.get("tag"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "无")
+            .map(str::to_string);
+        let heat = compact_heat(
+            raw.get("score")
+                .or_else(|| raw.get("hot_value_desc"))
+                .or_else(|| raw.get("hot_value"))
+                .or_else(|| raw.get("heat")),
+        );
+        let link = raw
+            .get("link")
+            .or_else(|| raw.get("url"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_link(platform, title));
+
+        items.push(HotRankItem {
+            t: title.to_string(),
+            heat,
+            tag,
+            link,
+        });
+        if items.len() >= 20 {
+            break;
+        }
+    }
+    items
+}
+
+async fn fetch_from_60s(client: &Client, platform: &str) -> Result<Vec<HotRankItem>, String> {
+    let path = primary_source_path(platform)
+        .ok_or_else(|| format!("暂不支持热榜平台：{platform}"))?;
+    let url = format!("{}/v2/{path}", base_url());
+    let resp = client
+        .get(&url)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("60s 热榜请求失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("60s 热榜返回 HTTP {}", resp.status().as_u16()));
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("60s 响应解析失败：{e}"))?;
+    if let Some(code) = body.get("code").and_then(|v| v.as_i64()) {
+        if code != 200 {
+            return Err(format!("60s 返回异常码：{code}"));
+        }
+    }
+    let arr = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "60s 未返回热榜列表".to_string())?;
+    let items = normalize_items(platform, arr);
+    if items.is_empty() {
+        return Err("60s 返回空列表".into());
+    }
+    Ok(items)
+}
+
+async fn fetch_from_uapis(client: &Client, platform: &str) -> Result<Vec<HotRankItem>, String> {
+    let source = uapis_source_type(platform)
+        .ok_or_else(|| format!("备用热榜暂不支持：{platform}"))?;
+    let url = format!("https://uapis.cn/api/v1/misc/hotboard?type={source}");
+    let resp = client
+        .get(&url)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("备用热榜请求失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("备用热榜返回 HTTP {}", resp.status().as_u16()));
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("备用热榜解析失败：{e}"))?;
+    let arr = body
+        .get("list")
+        .or_else(|| body.get("data"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "备用热榜未返回列表".to_string())?;
+    let items = normalize_items(platform, arr);
+    if items.is_empty() {
+        return Err("备用热榜返回空列表".into());
+    }
+    Ok(items)
+}
+
 pub async fn fetch_hot_rank(platform: &str) -> Result<Vec<HotRankItem>, String> {
-    let Some(path) = source_path(platform) else {
+    if primary_source_path(platform).is_none() {
         return Err(format!("暂不支持热榜平台：{platform}"));
-    };
+    }
 
     let hour_key = current_hour_key();
     let cached_fallback = {
@@ -106,79 +236,20 @@ pub async fn fetch_hot_rank(platform: &str) -> Result<Vec<HotRankItem>, String> 
         }
     };
 
-    let url = format!("{}/v2/{path}", base_url());
     let client = Client::builder()
-        .timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| e.to_string())?;
 
-    let result: Result<Vec<HotRankItem>, String> = async {
-        let resp = client
-            .get(&url)
-            .header("accept", "application/json")
-            .send()
-            .await
-            .map_err(|e| format!("热榜请求失败：{e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("上游热榜返回 HTTP {}", resp.status().as_u16()));
-        }
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("热榜响应解析失败：{e}"))?;
-        if let Some(code) = body.get("code").and_then(|v| v.as_i64()) {
-            if code != 200 {
-                return Err(format!("上游热榜返回异常码：{code}"));
-            }
-        }
-        let arr = body
-            .get("data")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| "上游未返回热榜列表".to_string())?;
-
-        let mut items = Vec::with_capacity(20);
-        for raw in arr {
-            let title = raw
-                .get("title")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim())
-                .unwrap_or("");
-            if title.is_empty() {
-                continue;
-            }
-            let tag = raw
-                .get("word_type")
-                .or_else(|| raw.get("tag"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty() && *s != "无")
-                .map(|s| s.to_string());
-            let heat = compact_heat(
-                raw.get("score")
-                    .or_else(|| raw.get("hot_value_desc"))
-                    .or_else(|| raw.get("hot_value"))
-                    .or_else(|| raw.get("heat")),
-            );
-            let link = raw
-                .get("link")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| fallback_link(platform, title));
-
-            items.push(HotRankItem {
-                t: title.to_string(),
-                heat,
-                tag,
-                link,
-            });
-            if items.len() >= 20 {
-                break;
-            }
-        }
-        Ok(items)
-    }
-    .await;
+    // 多源自动容错：优先 60s.viki.moe，失败（如 500/429）无缝切换 uapis.cn 公开热榜源
+    let result = match fetch_from_60s(&client, platform).await {
+        Ok(items) => Ok(items),
+        Err(primary_err) => match fetch_from_uapis(&client, platform).await {
+            Ok(items) => Ok(items),
+            Err(fallback_err) => Err(format!("{primary_err}；备用源：{fallback_err}")),
+        },
+    };
 
     match result {
         Ok(items) => {
@@ -207,14 +278,15 @@ pub async fn fetch_all_hot_ranks() -> AllHotRanksResult {
     let mut items = HashMap::new();
     let mut failed = Vec::new();
 
-    let (dy, xhs) = tokio::join!(fetch_hot_rank("抖音"), fetch_hot_rank("小红书"));
-    match dy {
+    // 错开 250ms 依次请求，避免触发同一上游源的突发 429 限流
+    match fetch_hot_rank("抖音").await {
         Ok(list) => {
             items.insert("抖音".to_string(), list);
         }
         Err(_) => failed.push("抖音".to_string()),
     }
-    match xhs {
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    match fetch_hot_rank("小红书").await {
         Ok(list) => {
             items.insert("小红书".to_string(), list);
         }

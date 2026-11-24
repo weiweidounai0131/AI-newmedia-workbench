@@ -325,9 +325,12 @@ pub async fn xigao_rewrite(req: XigaoRewriteReq) -> Result<TextOutResp, String> 
 #[serde(rename_all = "camelCase")]
 pub struct ChutuReq {
     pub prompt: String,
+    pub provider: Option<String>,
     pub size: Option<String>,
     pub quality: Option<String>,
-    pub ref_img: Option<String>,
+    pub optimize_hint: Option<String>,
+    #[serde(default)]
+    pub ref_imgs: Vec<VisionPart>,
 }
 
 #[tauri::command]
@@ -335,13 +338,22 @@ pub async fn chutu_generate(req: ChutuReq) -> Result<ImageResult, String> {
     if req.prompt.trim().is_empty() {
         return Err("图片提示词不能为空".into());
     }
-    ai_proxy::generate_image(
-        req.prompt.trim(),
-        req.size.as_deref(),
-        req.quality.as_deref(),
-        req.ref_img.as_deref(),
-    )
-    .await
+    let full_prompt = match req.optimize_hint.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(hint) => format!("{}\n\n用户修改意见：{hint}", req.prompt.trim()),
+        None => req.prompt.trim().to_string(),
+    };
+    let provider = req.provider.as_deref().unwrap_or("api");
+    if provider == "codex" {
+        ai_proxy::generate_codex_image(&full_prompt, req.size.as_deref(), &req.ref_imgs).await
+    } else {
+        ai_proxy::generate_image(
+            &full_prompt,
+            req.size.as_deref(),
+            req.quality.as_deref(),
+            &req.ref_imgs,
+        )
+        .await
+    }
 }
 
 #[tauri::command]

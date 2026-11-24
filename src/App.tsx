@@ -96,7 +96,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // 启动时加载真实配置、素材库与 Rust 核心健康状态
+  // 启动时加载真实配置与素材库
   useEffect(() => {
     let active = true;
     void api.getSettings().then((s) => {
@@ -110,6 +110,7 @@ export default function App() {
     };
   }, []);
 
+  // 侧栏常驻显示真实的内核与平台登录态
   useEffect(() => {
     let active = true;
     const refreshConnection = async () => {
@@ -155,78 +156,86 @@ export default function App() {
           <img className="logo brand-app-icon" src={appIcon} alt="AI新媒体工作台" />
           <div>
             <div className="name">AI新媒体工作台</div>
-            <div className="sub">Rust 原生 · 跨场改写</div>
+            <div className="sub">本地 · 跨场改写</div>
           </div>
         </div>
 
         <nav className="nav-group" aria-label="主导航">
-          {NAV.map((item) =>
-            'group' in item && item.group ? (
-              <div key={item.id} className="nav-section">
-                <div className="nav-section-title">{item.label}</div>
-                {item.group.map((sub) => {
-                  const active = view === sub.id;
-                  return (
-                    <button
-                      key={sub.id}
-                      type="button"
-                      className={`nav-item ${active ? 'active' : ''}`}
-                      onClick={() => setView(sub.id)}
-                    >
-                      {active && <ActivePill layoutId="nav-active-pill" className="nav-active-pill" />}
-                      <Icon name={sub.icon} className="ic" size={16} />
-                      <span>{sub.label}</span>
-                    </button>
-                  );
-                })}
+          {NAV.map((n) =>
+            n.group ? (
+              <div key={n.id}>
+                <div className="nav-label">{n.label}</div>
+                <div className="nav-sub">
+                  {n.group.map((s) => {
+                    const active = view === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`nav-item ${active ? 'active' : ''}`}
+                        onClick={() => setView(s.id)}
+                      >
+                        {active && <ActivePill layoutId="nav-active-pill" className="nav-active-pill" />}
+                        <Icon name={s.icon} className="ic" size={19} />
+                        {s.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <button
-                key={item.id}
+                key={n.id}
                 type="button"
-                className={`nav-item ${view === item.id ? 'active' : ''}`}
-                onClick={() => setView(item.id)}
+                className={`nav-item ${view === n.id ? 'active' : ''}`}
+                onClick={() => setView(n.id)}
               >
-                {view === item.id && <ActivePill layoutId="nav-active-pill" className="nav-active-pill" />}
-                <Icon name={item.icon} className="ic" size={16} />
-                <span>{item.label}</span>
+                {view === n.id && <ActivePill layoutId="nav-active-pill" className="nav-active-pill" />}
+                <Icon name={n.icon} className="ic" size={19} />
+                {n.label}
               </button>
             ),
           )}
         </nav>
 
         <div className="sidebar-foot">
-          <div className="conn-pill" title="Rust 原生核心状态">
-            <span className={`dot ${connection.system === 'online' ? 'ok' : ''}`} />
-            <span>
-              {connection.system === 'online'
-                ? 'Rust 核心在线'
-                : connection.system === 'checking'
-                  ? '正在检测…'
-                  : '核心离线'}
-            </span>
+          <button type="button" className="theme-toggle" onClick={toggleTheme}>
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} className="ic" size={16} />
+            {theme === 'dark' ? '浅色模式' : '深色模式'}
+          </button>
+          <div className="connection-status" aria-label="本地内核与平台 Cookie 状态">
+            <div className="local-badge">
+              <span
+                className={`dot ${
+                  connection.system === 'online'
+                    ? 'success'
+                    : connection.system === 'offline'
+                      ? 'danger'
+                      : 'warning'
+                }`}
+              />
+              Rust 内核 · {connection.system === 'online' ? '已连接' : connection.system === 'offline' ? '未连接' : '检测中'}
+            </div>
+            <div className="local-badge">
+              <span className={`dot ${connection.douyin ? 'success' : connection.douyin === null ? 'warning' : 'muted'}`} />
+              抖音 Cookie · {connection.douyin ? '已获取' : connection.douyin === null ? '检测中' : '未获取'}
+            </div>
+            <div className="local-badge">
+              <span className={`dot ${connection.xhs ? 'success' : connection.xhs === null ? 'warning' : 'muted'}`} />
+              小红书 Cookie · {connection.xhs ? '已获取' : connection.xhs === null ? '检测中' : '未获取'}
+            </div>
           </div>
-          <div className="conn-platforms">
-            <span className={`plat-pill ${connection.douyin ? 'on' : ''}`}>抖音</span>
-            <span className={`plat-pill ${connection.xhs ? 'on' : ''}`}>小红书</span>
-          </div>
+          <div className="sidebar-copyright">Copyright © 2026 jiangjiawei. 保留所有权利。</div>
         </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
-          <div className="crumbs">{crumbs || <b>首页</b>}</div>
-          <button
-            type="button"
-            className="btn ghost sm"
-            onClick={toggleTheme}
-            title="切换浅色/深色主题"
-          >
-            <Icon name={theme === 'dark' ? 'sun' : 'moon'} className="ic" size={15} />
-            <span>{theme === 'dark' ? '浅色' : '深色'}</span>
-          </button>
+          <h1>{title}</h1>
+          <div className="crumbs">{crumbs}</div>
+          <div className="spacer" />
         </header>
-        <main className="page">
+        <main className="view">
           <PageTransition viewKey={view} className="motion-page-stage">
             <View view={view} />
           </PageTransition>
