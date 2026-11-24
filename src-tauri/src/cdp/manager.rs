@@ -215,6 +215,9 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
         &format!("--remote-debugging-port={port}"),
         &format!("--user-data-dir={}", user_data.to_string_lossy()),
         &format!("--user-agent={CHROME_UA}"),
+        // 平台登录与采集固定直连本机网络，不走系统外网代理（既免回环被劫持，又防小红书/抖音海外 IP 风控）
+        "--proxy-server=direct://",
+        "--proxy-bypass-list=*",
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",

@@ -475,7 +475,9 @@ export default function Xigao() {
           <ModalHeader>{douyinModalOpen ? '抖音无水印视频解析与下载' : '小红书图文解析与下载'}</ModalHeader>
           <ModalBody>
             <div className="douyin-tool-intro">
-              已彻底移除外部工具与 iframe，由工作台 Rust 原生下载引擎直接处理，下载完成后自动解锁 AI 识别。
+              {douyinModalOpen
+                ? '正在通过本地引擎解析并下载抖音无水印视频，下载完成后自动解锁 AI 识别。'
+                : '正在通过本地引擎解析并下载小红书图文，下载完成后自动解锁 AI 识别。'}
             </div>
             {(douyinTaskError || xhsTaskError) && (
               <div className="source-feedback danger" role="alert">
@@ -492,19 +494,19 @@ export default function Xigao() {
                     {(douyinTaskStatus !== 'completed' && xhsTaskStatus !== 'completed') && <Spinner size="sm" color="primary" />}
                     <strong>{x.parseStatusText || '正在解析并下载素材，请稍候…'}</strong>
                   </div>
-                  <span className="tiny" style={{ fontWeight: 700, color: 'var(--accent)' }}>
+                  <span className="tiny" style={{ fontWeight: 700, color: 'var(--accent)', flexShrink: 0 }}>
                     {Math.round(douyinTaskStatus === 'completed' || xhsTaskStatus === 'completed' ? 100 : downloadPercent)}%
                   </span>
                 </div>
                 <SpringProgress percent={douyinTaskStatus === 'completed' || xhsTaskStatus === 'completed' ? 100 : Math.max(8, downloadPercent)} />
                 <div className="tiny" style={{ color: 'var(--text-3)' }}>
-                  全程在 Rust 本地引擎内流式落盘，共享工作台登录态，无需打开第三方工具窗口。
+                  下载全程在后台静默完成，共享工作台账号状态。
                 </div>
               </div>
             )}
           </ModalBody>
-          <ModalFooter>
-            <span className="tiny">
+          <ModalFooter className="flex items-center justify-between gap-3">
+            <span className="tiny" style={{ color: 'var(--text-3)' }}>
               {douyinTaskStatus === 'completed' || xhsTaskStatus === 'completed'
                 ? '下载成功，正在返回工作台…'
                 : douyinTaskError || xhsTaskError

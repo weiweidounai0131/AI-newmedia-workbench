@@ -45,15 +45,95 @@ pub struct ModelListResult {
     pub fetched_at: String,
 }
 
+/// 自动探测外网代理（优先环境变量；macOS 从 Finder 启动未继承终端变量时自动读取 scutil --proxy；Windows 读取注册表）
+/// 仅用于外网 AI API 与 Codex CLI，不影响本机 127.0.0.1 CDP 直连。
+fn detect_system_proxy() -> Option<String> {
+    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(val) = std::env::var(key) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("scutil").arg("--proxy").output() {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let get_val = |k: &str| -> Option<String> {
+                    for line in text.lines() {
+                        let t = line.trim();
+                        if let Some(rest) = t.strip_prefix(k) {
+                            if let Some((_, v)) = rest.split_once(':') {
+                                let v = v.trim();
+                                if !v.is_empty() {
+                                    return Some(v.to_string());
+                                }
+                            }
+                        }
+                    }
+                    None
+                };
+                if get_val("HTTPSEnable").as_deref() == Some("1") {
+                    if let (Some(h), Some(p)) = (get_val("HTTPSProxy"), get_val("HTTPSPort")) {
+                        return Some(format!("http://{h}:{p}"));
+                    }
+                }
+                if get_val("HTTPEnable").as_deref() == Some("1") {
+                    if let (Some(h), Some(p)) = (get_val("HTTPProxy"), get_val("HTTPPort")) {
+                        return Some(format!("http://{h}:{p}"));
+                    }
+                }
+                if get_val("SOCKSEnable").as_deref() == Some("1") {
+                    if let (Some(h), Some(p)) = (get_val("SOCKSProxy"), get_val("SOCKSPort")) {
+                        return Some(format!("socks5://{h}:{p}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(out) = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let enabled = text.lines().any(|l| l.contains("ProxyEnable") && l.contains("0x1"));
+                if enabled {
+                    for line in text.lines() {
+                        if line.contains("ProxyServer") {
+                            if let Some(val) = line.split_whitespace().last() {
+                                let v = val.trim();
+                                if !v.is_empty() {
+                                    return Some(if v.contains("://") {
+                                        v.to_string()
+                                    } else {
+                                        format!("http://{v}")
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn build_http_client(timeout_secs: u64) -> Result<Client, String> {
     let mut builder = Client::builder().timeout(Duration::from_secs(timeout_secs));
-    // 自动遵循本机 HTTPS_PROXY / ALL_PROXY 环境变量
-    if let Ok(proxy_url) = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .or_else(|_| std::env::var("ALL_PROXY"))
-        .or_else(|_| std::env::var("all_proxy"))
-    {
-        if let Ok(proxy) = reqwest::Proxy::all(proxy_url.trim()) {
+    if let Some(proxy_url) = detect_system_proxy() {
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
             builder = builder.proxy(proxy);
         }
     }
@@ -696,12 +776,26 @@ pub async fn generate_codex_image(
 
         let mut cmd = tokio::process::Command::new(&cli);
         cmd.env("PATH", enriched_child_path());
+        // 自动注入系统代理供 Codex CLI 访问外网，同时显式豁免本地回环地址
+        if let Some(proxy_url) = detect_system_proxy() {
+            crate::core::logger::info("codex", format!("injecting proxy for codex imagegen: {proxy_url}"));
+            cmd.env("HTTP_PROXY", &proxy_url)
+                .env("HTTPS_PROXY", &proxy_url)
+                .env("ALL_PROXY", &proxy_url)
+                .env("http_proxy", &proxy_url)
+                .env("https_proxy", &proxy_url)
+                .env("all_proxy", &proxy_url)
+                .env("NO_PROXY", "127.0.0.1,localhost,::1")
+                .env("no_proxy", "127.0.0.1,localhost,::1");
+        }
         cmd.args([
             "exec",
             "--json",
             "--skip-git-repo-check",
             "--sandbox",
             "danger-full-access",
+            "-c",
+            "mcp_servers={}",
             "-C",
             &temp_dir.to_string_lossy(),
             "--add-dir",
@@ -741,9 +835,18 @@ pub async fn generate_codex_image(
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if !output.status.success() {
-            let detail = if !stderr.is_empty() { stderr } else { stdout };
-            let clipped: String = detail.chars().take(400).collect();
-            return Err(format!("Codex 订阅出图失败：{clipped}"));
+            let detail = if !stderr.is_empty() { &stderr } else { &stdout };
+            crate::core::logger::error("codex", format!("codex exec exited {}: {}", output.status, detail));
+            // 优先取末尾关键错误行，避免被启动时的 skills/mcp 警告截断
+            let tail: String = detail
+                .chars()
+                .rev()
+                .take(400)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            return Err(format!("Codex 订阅出图失败：{tail}"));
         }
 
         let thread_id = extract_codex_thread_id(&stdout)
