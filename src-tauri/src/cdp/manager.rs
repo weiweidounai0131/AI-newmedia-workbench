@@ -108,8 +108,49 @@ fn pick_free_port() -> Result<u16, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn fetch_page_ws_url(port: u16) -> Result<String, String> {
+/// 仅精准清理占用本工作台独立 Profile 目录的残留浏览器进程与死锁文件（绝不影响用户日常 Chrome）
+fn cleanup_stale_profile_browser(user_data: &std::path::Path) {
+    let dir_str = user_data.to_string_lossy().to_string();
+    #[cfg(unix)]
+    {
+        let pattern = format!("--user-data-dir={dir_str}");
+        let _ = Command::new("pkill")
+            .args(["-f", &pattern])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let escaped = dir_str.replace('\'', "''");
+        let ps = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*--user-data-dir={escaped}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        );
+        let _ = Command::new("powershell.exe")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    for lock_name in [
+        "SingletonLock",
+        "SingletonSocket",
+        "SingletonCookie",
+        "DevToolsActivePort",
+    ] {
+        let p = user_data.join(lock_name);
+        let _ = fs::remove_file(&p);
+    }
+}
+
+async fn fetch_page_ws_url(port: u16, child: &mut Child) -> Result<String, String> {
+    // 关键：强制 no_proxy() 直连本机 127.0.0.1，防止被本机系统代理/Clash 劫持导致超时！
     let client = Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(3))
         .build()
         .map_err(|e| e.to_string())?;
@@ -117,6 +158,11 @@ async fn fetch_page_ws_url(port: u16) -> Result<String, String> {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline {
+        if let Ok(Some(exit_status)) = child.try_wait() {
+            return Err(format!(
+                "后台浏览器进程提前退出（{exit_status}），请重试或检查本机 Chrome/Edge 状态"
+            ));
+        }
         if let Ok(resp) = client.get(&list_url).send().await {
             if let Ok(arr) = resp.json::<Vec<Value>>().await {
                 if let Some(ws) = arr
@@ -129,7 +175,7 @@ async fn fetch_page_ws_url(port: u16) -> Result<String, String> {
                 }
             }
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(220)).await;
     }
 
     Err("等待本机浏览器启动 CDP 调试端口超时，请检查安全软件或重试".into())
@@ -153,6 +199,7 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
     })?;
     let port = pick_free_port()?;
     let user_data = profile_dir(platform)?;
+    cleanup_stale_profile_browser(&user_data);
 
     let mut cmd = Command::new(&exe);
     let visible_browser = std::env::var("NEWMEDIA_VISIBLE_BROWSER")
@@ -164,6 +211,7 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
         cmd.arg("--headless=new");
     }
     cmd.args([
+        "--remote-debugging-address=127.0.0.1",
         &format!("--remote-debugging-port={port}"),
         &format!("--user-data-dir={}", user_data.to_string_lossy()),
         &format!("--user-agent={CHROME_UA}"),
@@ -179,11 +227,17 @@ async fn ensure_session(platform: PlatformKey) -> Result<CdpSession, String> {
     .stdout(Stdio::null())
     .stderr(Stdio::null());
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("拉起本机浏览器失败（{exe}）：{e}"))?;
 
-    let ws_url = fetch_page_ws_url(port).await?;
+    let ws_url = match fetch_page_ws_url(port, &mut child).await {
+        Ok(u) => u,
+        Err(e) => {
+            let _ = child.kill();
+            return Err(e);
+        }
+    };
     let session = CdpSession::connect(&ws_url).await?;
     let _ = session
         .send(

@@ -142,7 +142,8 @@ export default function Settings() {
       startPoll(platform);
     } catch (e: any) {
       setQrModal((m) => ({ ...m, error: e?.message || '登录失败' }));
-      startPoll(platform); // 仍尝试轮询，用户可能手动在浏览器窗口扫码
+    } finally {
+      setLoginLoading(null);
     }
   }
 
@@ -867,8 +868,9 @@ export default function Settings() {
         <ModalContent>
           {() => (
             <>
-              <ModalHeader>
-                <Icon name="spark" className="ic" size={18} /> 登录「{qrModal.platform}」
+              <ModalHeader className="flex flex-row items-center gap-2">
+                <Icon name="spark" className="ic" size={18} />
+                <span>登录「{qrModal.platform}」</span>
               </ModalHeader>
               <ModalBody style={{ minHeight: 220, textAlign: 'center' }}>
                 {qrModal.error ? (
