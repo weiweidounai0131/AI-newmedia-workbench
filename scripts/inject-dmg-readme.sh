@@ -47,6 +47,15 @@ if [ -z "$MNT_DIR" ] || [ ! -d "$MNT_DIR" ]; then
 fi
 
 cp "$README_PATH" "$MNT_DIR/首次安装必看说明.txt"
+chmod 644 "$MNT_DIR/首次安装必看说明.txt"
+ICON_SRC="$SCRIPT_DIR/../src-tauri/icons/icon.icns"
+if [ -f "$ICON_SRC" ] && [ ! -f "$MNT_DIR/.VolumeIcon.icns" ]; then
+  cp "$ICON_SRC" "$MNT_DIR/.VolumeIcon.icns"
+  chmod 644 "$MNT_DIR/.VolumeIcon.icns"
+  if command -v SetFile >/dev/null 2>&1; then
+    SetFile -a C "$MNT_DIR" >/dev/null 2>&1 || true
+  fi
+fi
 VOL_NAME="$(basename "$MNT_DIR")"
 
 # 使用 Finder AppleScript 排版三图标三角形布局（左 App / 右 Applications / 中下 首次安装必看说明.txt）
