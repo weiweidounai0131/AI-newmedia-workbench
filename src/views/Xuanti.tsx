@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Button, Input, Link, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Spinner, Tab, Tabs } from '@heroui/react';
+import { Button, Checkbox, Input, Link, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Spinner, Tab, Tabs } from '@heroui/react';
 import { useApp, setXuanti, addTopic, clearTopics, exportTextToLib, fmtYMD, loadHotRanks } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import { PLAT_COLORS, type SearchItem } from '../data/sample';
 
-const HOT_PLATFORMS = ['抖音', '小红书'];
+const HOT_PLATFORMS = ['抖音', '小红书', '微博', '知乎'];
 const SEARCH_PLATFORMS = ['抖音', '小红书'];
+const SEARCH_RISK_DISMISS_KEY = 'newmedia-search-risk-notice-dismissed-v2';
 
 function formatRemain(seconds: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -19,6 +20,8 @@ export default function Xuanti() {
   const [kw, setKw] = useState(xuanti.search.kw);
   const [searchConfirmOpen, setSearchConfirmOpen] = useState(false);
   const [searchRiskNoticeOpen, setSearchRiskNoticeOpen] = useState(false);
+  const [dontShowRiskAgain, setDontShowRiskAgain] = useState(false);
+  const [needVerify, setNeedVerify] = useState(false);
   const [platform, setPlatform] = useState(xuanti.search.platform);
   const [cooldowns, setCooldowns] = useState<Record<string, { expiresAt: number }>>({});
   const [clock, setClock] = useState(Date.now());
@@ -42,13 +45,16 @@ export default function Xuanti() {
 
   function switchTab(t: 'hot' | 'search' | 'topics') {
     setXuanti({ tab: t });
-    if (t === 'search' && !window.localStorage.getItem('newmedia-search-risk-notice-read')) {
+    if (t === 'search' && !window.localStorage.getItem(SEARCH_RISK_DISMISS_KEY)) {
+      setDontShowRiskAgain(false);
       setSearchRiskNoticeOpen(true);
     }
   }
 
   function confirmSearchRiskNotice(): void {
-    window.localStorage.setItem('newmedia-search-risk-notice-read', '1');
+    if (dontShowRiskAgain) {
+      window.localStorage.setItem(SEARCH_RISK_DISMISS_KEY, '1');
+    }
     setSearchRiskNoticeOpen(false);
   }
 
@@ -83,12 +89,15 @@ export default function Xuanti() {
     if (searching) return;
     const keyword = kw.trim();
     if (!keyword) return toast('请先输入搜索关键词', 'warning');
+    setNeedVerify(false);
     setXuanti({ search: { kw: keyword, platform, items: [], live: null, message: null, status: 'searching' } });
     try {
       const r = await api.getSearch(keyword, platform);
       if (r.live) {
+        setNeedVerify(false);
         setXuanti({ search: { kw: keyword, platform, items: r.items || [], live: true, message: null, status: 'done' } });
       } else {
+        setNeedVerify(r.reason === 'verify_check');
         setXuanti({ search: { kw: keyword, platform, items: [], live: false, message: r.message || null, status: 'error' } });
         toast(r.message || `「${platform}」未获取到真实结果，请检查登录态`, 'warning');
       }
@@ -246,9 +255,14 @@ export default function Xuanti() {
                 <>
                   <ModalHeader>使用主动搜索前请注意</ModalHeader>
                   <ModalBody>
-                    自动抓取可能触发平台风控。虽然每次抓取均已设置冷却时间，为降低风险，请尽量自行在浏览器中查找内容，并复制对应链接到工作台使用。
+                    <p style={{ margin: 0, lineHeight: 1.7 }}>
+                      通过软件自动抓取有概率触发平台风控（如人机滑块验证或访问限流）。为降低账号与 IP 风险，建议优先自行打开平台手动搜索，并将目标链接复制到工作台中使用。
+                    </p>
                   </ModalBody>
-                  <ModalFooter>
+                  <ModalFooter className="flex items-center justify-between gap-3">
+                    <Checkbox size="sm" isSelected={dontShowRiskAgain} onValueChange={setDontShowRiskAgain}>
+                      勾选后不再弹出此提示
+                    </Checkbox>
                     <Button color="primary" onPress={confirmSearchRiskNotice}>我已了解</Button>
                   </ModalFooter>
                 </>
@@ -279,7 +293,7 @@ export default function Xuanti() {
                   <>
                     <ModalHeader>开始主动搜索</ModalHeader>
                     <ModalBody>
-                      本次搜索会打开已在设置页登录的浏览器窗口。若出现登录或安全验证，请在该窗口完成验证后保持窗口打开，工作台会自动继续并返回结果；无需关闭窗口。搜索完成后，该平台会进入选题冷却期。
+                      本次搜索将在后台静默执行，不会弹出外部浏览器窗口。如触发平台安全验证，系统会提示你按需处理；搜索完成后该平台会进入冷却期以降低风控风险。
                     </ModalBody>
                     <ModalFooter>
                       <Button variant="light" onPress={onClose}>取消</Button>
@@ -293,15 +307,50 @@ export default function Xuanti() {
             </Modal>
             <div id="searchList">
               {searchLive !== null && !searching && (
-                <div className="tiny" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="tiny" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   {searchLive ? (
                     <span className="set-status ok">
                       <Icon name="check" className="ic" size={13} /> 真实数据
                     </span>
                   ) : (
-                    <span className="set-status no">
-                      <Icon name="alert" className="ic" size={13} /> {searchMsg || '未获取到真实结果'}
-                    </span>
+                    <>
+                      <span className="set-status no">
+                        <Icon name="alert" className="ic" size={13} /> {searchMsg || '未获取到真实结果'}
+                      </span>
+                      {needVerify && (
+                        <Button
+                          size="sm"
+                          color="primary"
+                          variant="flat"
+                          onPress={async () => {
+                            try {
+                              await api.openVerifyWindow(platform, kw.trim());
+                              toast('已打开验证窗口，完成滑块验证后再次点击「搜索」即可', 'default');
+                            } catch (e: any) {
+                              toast(e?.message || '打开验证窗口失败', 'danger');
+                            }
+                          }}
+                        >
+                          打开验证窗口
+                        </Button>
+                      )}
+                      {kw.trim() && (
+                        <Button
+                          size="sm"
+                          variant="bordered"
+                          className="topic-outline-button"
+                          onPress={() => {
+                            const encoded = encodeURIComponent(kw.trim());
+                            const url = platform === '抖音'
+                              ? `https://www.douyin.com/search/${encoded}?type=general`
+                              : `https://www.xiaohongshu.com/search_result?keyword=${encoded}&type=51`;
+                            void api.openExternalUrl(url);
+                          }}
+                        >
+                          在浏览器手动搜索
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               )}

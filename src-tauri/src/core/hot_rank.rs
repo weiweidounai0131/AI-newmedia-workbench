@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// 优先聚焦刚需：抖音 + 小红书（保留扩展接口位）
-pub const HOT_RANK_PLATFORMS: [&str; 2] = ["抖音", "小红书"];
+/// 支持 4 大内容热榜平台（60s + uapis 双源容错）
+pub const HOT_RANK_PLATFORMS: [&str; 4] = ["抖音", "小红书", "微博", "知乎"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotRankItem {
@@ -278,19 +278,17 @@ pub async fn fetch_all_hot_ranks() -> AllHotRanksResult {
     let mut items = HashMap::new();
     let mut failed = Vec::new();
 
-    // 错开 250ms 依次请求，避免触发同一上游源的突发 429 限流
-    match fetch_hot_rank("抖音").await {
-        Ok(list) => {
-            items.insert("抖音".to_string(), list);
+    // 错开 200ms 依次请求 4 平台，避免触发同一上游源突发 429 限流
+    for (idx, platform) in HOT_RANK_PLATFORMS.iter().enumerate() {
+        if idx > 0 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        Err(_) => failed.push("抖音".to_string()),
-    }
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    match fetch_hot_rank("小红书").await {
-        Ok(list) => {
-            items.insert("小红书".to_string(), list);
+        match fetch_hot_rank(platform).await {
+            Ok(list) => {
+                items.insert((*platform).to_string(), list);
+            }
+            Err(_) => failed.push((*platform).to_string()),
         }
-        Err(_) => failed.push("小红书".to_string()),
     }
 
     AllHotRanksResult {

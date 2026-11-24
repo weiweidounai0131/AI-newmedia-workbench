@@ -412,6 +412,8 @@ export const api = {
     tauriInvoke('scrape_login_session', { platform }),
   scrapeLogout: (platform: string): Promise<boolean> =>
     tauriInvoke('scrape_logout', { platform }),
+  openVerifyWindow: (platform: string, kw?: string): Promise<boolean> =>
+    tauriInvoke('open_verify_window', { platform, kw: kw || null }),
 
   // ---- Phase 4 已接通：Rust 原生抖音/小红书无水印下载器与来源识别（彻底替代 wechat-mp-tools） ----
   xigaoRecognizeLink: (body: { link: string; platform?: string }): Promise<any> =>

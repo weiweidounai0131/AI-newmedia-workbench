@@ -55,3 +55,9 @@ pub async fn search_content(
 ) -> SearchResp {
     manager::search_platform(&platform, &kw, limit.unwrap_or(20).clamp(1, 30)).await
 }
+
+#[tauri::command]
+pub async fn open_verify_window(platform: String, kw: Option<String>) -> Result<bool, String> {
+    manager::open_verify_window(&platform, kw.as_deref()).await?;
+    Ok(true)
+}

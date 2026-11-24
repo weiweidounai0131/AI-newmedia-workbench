@@ -771,11 +771,14 @@ pub async fn search_platform(
 
     if let Some(err) = risk_err {
         if captured.is_empty() {
-            cooldown::mark_risk_control("topic", platform.name(), 60);
+            let is_verify = err.contains("verify_check");
+            if !is_verify {
+                cooldown::mark_risk_control("topic", platform.name(), 60);
+            }
             return SearchResp {
                 items: vec![],
                 live: false,
-                reason: Some("risk_control".into()),
+                reason: Some(if is_verify { "verify_check" } else { "risk_control" }.into()),
                 message: Some(err),
             };
         }
@@ -888,6 +891,70 @@ pub async fn fetch_initial_state_via_cdp(
 
     crate::core::logger::warn("cdp", format!("timeout waiting __INITIAL_STATE__ for {} url={url}", platform.key()));
     Err("未在页面中获取到内容数据，可能登录已过期或链接受风控保护".into())
+}
+
+/// 仅在用户主动触发（如遇到抖音 verify_check 滑块验证）时，用有头可见窗口复用同一隔离 Profile 打开搜索页完成一次人机验证
+pub async fn open_verify_window(platform_name: &str, keyword: Option<&str>) -> Result<(), String> {
+    let platform = PlatformKey::from_name(platform_name)
+        .ok_or_else(|| format!("暂不支持「{platform_name}」"))?;
+    let browser = detect_system_browser();
+    let exe = browser
+        .path
+        .ok_or_else(|| "未检测到本机 Chrome 或 Edge 浏览器".to_string())?;
+    let user_data = profile_dir(platform)?;
+
+    // 先关闭后台静默实例释放 Profile 锁，再以可见有头窗口打开同一 Profile
+    {
+        let mut guard = INSTANCES.lock().await;
+        if let Some(mut inst) = guard.remove(&platform) {
+            let _ = inst.child.kill();
+        }
+    }
+    cleanup_stale_profile_browser(&user_data);
+
+    let url = keyword
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|kw| platform.search_url(kw))
+        .unwrap_or_else(|| platform.login_url().to_string());
+
+    let port = pick_free_port()?;
+    let mut cmd = Command::new(&exe);
+    cmd.args([
+        "--remote-debugging-address=127.0.0.1",
+        &format!("--remote-debugging-port={port}"),
+        &format!("--user-data-dir={}", user_data.to_string_lossy()),
+        "--proxy-server=direct://",
+        "--proxy-bypass-list=*",
+        "--disable-blink-features=AutomationControlled",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=1180,800",
+        &url,
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("打开验证窗口失败：{e}"))?;
+    if let Ok(ws_url) = fetch_page_ws_url(port, &mut child).await {
+        if let Ok(session) = CdpSession::connect(&ws_url).await {
+            let mut guard = INSTANCES.lock().await;
+            guard.insert(
+                platform,
+                BrowserInstance {
+                    _port: port,
+                    child,
+                    session,
+                },
+            );
+            crate::core::logger::info("cdp", format!("opened visible verify window for {}", platform.key()));
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// 退出工作台时安全回收本次启动的所有浏览器进程（完整保留磁盘 Profile）

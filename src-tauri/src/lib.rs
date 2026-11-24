@@ -67,6 +67,7 @@ pub fn run() {
             commands::scrape::scrape_login,
             commands::scrape::scrape_logout,
             commands::scrape::search_content,
+            commands::scrape::open_verify_window,
             // Phase 4 Rust 原生下载器与来源识别（替代 wechat-mp-tools）
             commands::download::xigao_douyin_start,
             commands::download::xigao_douyin_status,

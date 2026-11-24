@@ -401,6 +401,18 @@ fn parse_douyin_search(payload: &Value) -> (Vec<SearchItem>, Option<String>) {
         );
     }
 
+    // 精准识别抖音人机滑块验证拦截（verify_check）
+    if payload
+        .pointer("/search_nil_info/search_nil_type")
+        .and_then(|v| v.as_str())
+        == Some("verify_check")
+    {
+        return (
+            vec![],
+            Some("抖音触发安全验证（verify_check），请点击下方「打开验证窗口」完成一次滑块验证后重试，或改为手动搜索".into()),
+        );
+    }
+
     let mut items = Vec::new();
     // 1. 标准 /single/ 与 /stream/ 结构：data[].aweme_info 或 data[].aweme_mix_info / sub_card_list
     if let Some(arr) = payload.get("data").and_then(|v| v.as_array()) {

@@ -139,7 +139,7 @@ export default function Home() {
             {hotRanks.loading ? (
               <div className="home-hot-state"><Spinner size="sm" /> 正在加载当日热点…</div>
             ) : Object.keys(hotRanks.items).length ? (
-              ['抖音', '小红书'].map((p) => (
+              ['抖音', '小红书', '微博', '知乎'].map((p) => (
                   <div className="th-col" key={p}>
                     <div className="th-head">
                       <span className="plat-dot" style={{ background: PLAT_COLORS[p] }} />
