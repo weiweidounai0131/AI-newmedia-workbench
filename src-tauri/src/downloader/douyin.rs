@@ -221,10 +221,18 @@ async fn run_douyin_task(app: AppHandle, task_id: String, raw_link: String) {
 
         update_task(&app, &task_id, "running", 45.0, format!("已解析《{}》，正在流式下载无水印视频…", title.chars().take(24).collect::<String>()), None, None);
 
-        let download_dir = resolve_app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("downloads")
-            .join("douyin");
+        let download_dir = if let Some(custom) = crate::core::settings::load_stored()
+            .ok()
+            .and_then(|s| s.xhs_download_dir)
+            .filter(|s| !s.trim().is_empty())
+        {
+            PathBuf::from(custom).join("douyin")
+        } else {
+            resolve_app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("downloads")
+                .join("douyin")
+        };
         fs::create_dir_all(&download_dir).map_err(|e| format!("创建下载目录失败：{e}"))?;
 
         let short_title: String = title.chars().take(36).collect();

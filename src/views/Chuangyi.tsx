@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Radio, RadioGroup, Textarea } from '@heroui/react';
 import { addCreativeTableRecord, clearCreativeTable, exportTextToLib, useApp, setCreative } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
+import { AiStreamBox } from '../motion';
 import { useToastMsg } from '../lib/ui';
 
 export default function Chuangyi() {
@@ -15,6 +16,27 @@ export default function Chuangyi() {
   const [selectedTopicId, setSelectedTopicId] = useState('');
   const [optimizeHint, setOptimizeHint] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [streamOut, setStreamOut] = useState('');
+
+  useEffect(() => {
+    if (creative.stage === 'generating') setStreamOut('');
+  }, [creative.stage]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void api
+      .listen<{ channel: string; text: string; done: boolean }>('ai-stream', (ev) => {
+        if (ev.channel === 'creative-out') {
+          setStreamOut(ev.text || '');
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
   const [optimizing, setOptimizing] = useState(false);
 
   const hotTopics = useMemo(() => topics.filter((topic) => topic.source === '热榜' && Boolean(topic.link)), [topics]);
@@ -149,7 +171,17 @@ export default function Chuangyi() {
         <div className="panel">
           <div className="panel-head"><h3><Icon name="spark" className="ic" size={18} /> 创作方向 · 待你确认</h3><div className="spacer" />{creative.model && <span className="tiny">{creative.model}</span>}</div>
           <div className="panel-body">
-            {directionsLoading ? <div className="out-box empty">正在根据热榜与结合信息生成 4 个借势方向…</div> : creative.directions.length ? <RadioGroup value={creative.selected === null ? undefined : String(creative.selected)} onValueChange={(value) => setCreative({ selected: Number(value), out: creative.out, stage: creative.stage === 'done' ? 'directionsReady' : creative.stage })} isDisabled={generating} className="creative-direction-group"><div className="creative-direction-grid">{creative.directions.map((direction, index) => <div key={index} className={`creative-direction-card ${creative.selected === index ? 'selected' : ''}`}><div className="creative-direction-head"><b>方向 {['一', '二', '三', '四'][index]}</b><Radio value={String(index)} aria-label={`选择方向${index + 1}`} /></div><div className="creative-direction-content">{direction}</div></div>)}</div></RadioGroup> : <div className="out-box empty">填写热榜链接与结合信息后，点击「AI 创意生成」获取 4 个借势宣传方向。</div>}
+            {directionsLoading ? (
+              <AiStreamBox
+                streaming
+                content=""
+                placeholder=""
+                streamingLabel="AI 正在构思 4 个差异化借势方向…"
+                subLabel="创意策划"
+                lines={4}
+                minHeight={168}
+              />
+            ) : creative.directions.length ? <RadioGroup value={creative.selected === null ? undefined : String(creative.selected)} onValueChange={(value) => setCreative({ selected: Number(value), out: creative.out, stage: creative.stage === 'done' ? 'directionsReady' : creative.stage })} isDisabled={generating} className="creative-direction-group"><div className="creative-direction-grid">{creative.directions.map((direction, index) => <div key={index} className={`creative-direction-card ${creative.selected === index ? 'selected' : ''}`}><div className="creative-direction-head"><b>方向 {['一', '二', '三', '四'][index]}</b><Radio value={String(index)} aria-label={`选择方向${index + 1}`} /></div><div className="creative-direction-content">{direction}</div></div>)}</div></RadioGroup> : <div className="out-box empty">填写热榜链接与结合信息后，点击「AI 创意生成」获取 4 个借势宣传方向。</div>}
             <div style={{ marginTop: 16 }}>
               <div className="field"><label>创作要求（可选）</label><Input value={creative.requirement} onValueChange={(requirement) => setCreative({ requirement })} placeholder="例如：输出一个长海报的文案" isDisabled={generating || creative.selected === null} /></div>
               <Button color="primary" className="w-full" isLoading={generating} isDisabled={creative.selected === null || generating || directionsLoading} onPress={() => void generateContent()}>AI 生成</Button>
@@ -159,7 +191,15 @@ export default function Chuangyi() {
         <div className="panel" style={{ marginTop: 16 }}>
           <div className="panel-head"><h3><Icon name="pen" className="ic" size={18} /> 创意内容</h3><div className="spacer" /><Button size="sm" color="primary" isLoading={exporting} isDisabled={!hasOut || exporting} onPress={() => void exportToLibrary()}><Icon name="archive" className="ic" size={14} /> 导出到素材库</Button><Button size="sm" variant="bordered" className="topic-outline-button" isDisabled={!hasOut || exporting} onPress={() => void downloadWord()}><Icon name="file" className="ic" size={14} /> 导出 Word</Button></div>
           <div className="panel-body">
-            <div className={`out-box ${hasOut ? '' : 'empty'}`}>{generating ? '正在根据选定方向生成内容…' : creative.out || '选择一个创作方向后，填写要求并点击「AI 生成」。'}</div>
+            <AiStreamBox
+              streaming={generating}
+              content={generating ? streamOut : creative.out}
+              placeholder="选择一个创作方向后，填写要求并点击「AI 生成」。"
+              streamingLabel={streamOut ? 'AI 正在流式生成创意内容…' : 'AI 正在根据选定方向撰写内容…'}
+              subLabel="实时生成"
+              lines={5}
+              minHeight={168}
+            />
             <div className="optimize"><div><div className="lab">不满意？输入修改意见，AI 即优化</div><Input aria-label="创意优化意见" value={optimizeHint} onValueChange={setOptimizeHint} placeholder="例：更口语一点，突出产品卖点" size="sm" /></div><Button size="sm" variant="bordered" className="topic-outline-button" isLoading={optimizing} isDisabled={!hasOut || optimizing} onPress={() => void optimizeContent()}><Icon name="refresh" className="ic" size={14} /> AI 优化</Button></div>
           </div>
         </div>

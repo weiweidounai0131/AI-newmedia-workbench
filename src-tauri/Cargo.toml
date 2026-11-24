@@ -1,6 +1,6 @@
 [package]
 name = "newmedia-workbench-rs"
-version = "1.0.0-alpha.1"
+version = "2.0.0"
 description = "AI新媒体工作台（Tauri 2 + Rust 原生重构版）"
 authors = ["jiangjiawei"]
 edition = "2021"

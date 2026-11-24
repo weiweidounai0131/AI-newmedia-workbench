@@ -72,6 +72,8 @@ pub struct StoredSettings {
     #[serde(default)]
     pub capability_configs: HashMap<CapId, Vec<CapConfigEntry>>,
     #[serde(default)]
+    pub removed_capability_configs: HashMap<CapId, Vec<CapConfigEntry>>,
+    #[serde(default)]
     pub key_versions: HashMap<String, u32>,
     #[serde(default)]
     pub verified: HashMap<CapId, VerificationStamp>,
@@ -416,8 +418,23 @@ fn cap_configs_for(
 ) -> Vec<CapConfigEntry> {
     let mut entries: Vec<CapConfigEntry> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let (active_p, active_m) = active_pair(stored, cap);
+
+    let is_removed = |pid: &str, mid: &str| -> bool {
+        if pid == active_p && mid == active_m {
+            return false;
+        }
+        stored
+            .removed_capability_configs
+            .get(&cap)
+            .map(|list| list.iter().any(|e| e.provider_id == pid && e.model == mid))
+            .unwrap_or(false)
+    };
 
     let mut push_unique = |provider_id: String, model: String| {
+        if is_removed(&provider_id, &model) {
+            return;
+        }
         let key = format!("{provider_id}::{model}");
         if seen.insert(key) {
             entries.push(CapConfigEntry { provider_id, model });
@@ -450,9 +467,8 @@ fn cap_configs_for(
         }
     }
 
-    let (active_p, active_m) = active_pair(stored, cap);
     if providers.iter().any(|p| p.id == active_p) {
-        push_unique(active_p, active_m);
+        push_unique(active_p.clone(), active_m.clone());
     }
 
     entries
@@ -797,8 +813,13 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
 
     stored.provider_catalog.insert(id.clone(), record);
 
-    // 新增配置按需求不自动启用，仅添加到对应能力的可选列表；编辑活动项时使验证失效
+    // 新增配置按需求不自动启用，仅添加到对应能力的可选列表；若此前曾移除过同项，自动解除黑名单
     if let Some(cap) = draft.cap {
+        if let Some(removed) = stored.removed_capability_configs.get_mut(&cap) {
+            for m in &clean_models {
+                removed.retain(|e| !(e.provider_id == id && e.model == m.id));
+            }
+        }
         let list = stored.capability_configs.entry(cap).or_default();
         for m in &clean_models {
             if !list.iter().any(|e| e.provider_id == id && e.model == m.id) {
@@ -838,6 +859,18 @@ pub fn delete_capability_config(
 
     if let Some(list) = stored.capability_configs.get_mut(&cap) {
         list.retain(|e| !(e.provider_id == provider_id && e.model == model));
+    }
+
+    // 无论内置还是自定义配置，统一记录至该能力的移除黑名单，彻底避免内置模型复活
+    let removed_list = stored.removed_capability_configs.entry(cap).or_default();
+    if !removed_list
+        .iter()
+        .any(|e| e.provider_id == provider_id && e.model == model)
+    {
+        removed_list.push(CapConfigEntry {
+            provider_id: provider_id.to_string(),
+            model: model.to_string(),
+        });
     }
 
     // 若属于自定义供应商，同步从其 models 移除；若该自定义供应商已无模型，则清理整个自定义供应商及密钥
@@ -891,4 +924,40 @@ pub fn set_xhs_download_dir(dir: Option<String>) -> Result<SettingsSummary, Stri
 pub fn current_root_dir() -> Option<String> {
     let _g = SETTINGS_LOCK.lock().unwrap();
     load_stored().ok().and_then(|s| s.root_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_builtin_model_persists_in_blacklist() {
+        let mut stored = StoredSettings::default();
+        // 切换 text 当前活动项为智谱，使得 deepseek-chat / deepseek-reasoner 可被移除
+        stored.providers.insert(CapId::Text, "zhipu".into());
+        stored.suppliers.insert(CapId::Text, "glm-5.3-flash".into());
+        stored.removed_capability_configs.insert(
+            CapId::Text,
+            vec![
+                CapConfigEntry {
+                    provider_id: "deepseek".into(),
+                    model: "deepseek-chat".into(),
+                },
+                CapConfigEntry {
+                    provider_id: "deepseek".into(),
+                    model: "deepseek-reasoner".into(),
+                },
+            ],
+        );
+
+        let summary = build_summary(&stored);
+        let text_cap = summary.caps.iter().find(|c| c.cap == CapId::Text).unwrap();
+        assert!(
+            !text_cap
+                .configurations
+                .iter()
+                .any(|c| c.provider_id == "deepseek"),
+            "removed builtin deepseek models must not reappear"
+        );
+    }
 }

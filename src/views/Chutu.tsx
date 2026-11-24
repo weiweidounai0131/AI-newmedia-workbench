@@ -3,6 +3,7 @@ import { Button, Textarea, Chip, Input } from '@heroui/react';
 import { useApp, setChutu, setView, exportImageToLib } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
+import { AiStreamBox } from '../motion';
 import { useToastMsg, mapSize, mapQuality } from '../lib/ui';
 
 // API 默认 gpt-image-2：按设置页当前图像供应商开放 1K / 2K / 4K 画幅。
@@ -231,11 +232,16 @@ export default function Chutu() {
           </div>
           <div className="panel-body" style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
             {chutu.generating ? (
-              <div style={{ width: '72%', display: 'grid', gap: 11 }} aria-label="模型生成中">
-                <div className="skeleton sk-line" style={{ width: '94%', height: 14 }} />
-                <div className="skeleton sk-line" style={{ width: '76%', height: 14 }} />
-                <div className="skeleton sk-line" style={{ width: '86%', height: 14 }} />
-                <div className="tiny" style={{ marginTop: 4, textAlign: 'center' }}>模型生成中，请稍候…</div>
+              <div style={{ width: '100%' }}>
+                <AiStreamBox
+                  streaming
+                  content=""
+                  placeholder=""
+                  streamingLabel={chutu.provider === 'codex' ? 'Codex 订阅引擎正在绘制成品图像…' : '图像模型正在渲染成品，请稍候…'}
+                  subLabel="图像生成"
+                  lines={5}
+                  minHeight={260}
+                />
               </div>
             ) : chutu.b64 ? (
               <img

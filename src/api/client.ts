@@ -144,7 +144,7 @@ export const api = {
     if (!isTauriRuntime()) {
       return {
         ok: true,
-        appVersion: '1.0.0-alpha.1 (Web 预览)',
+        appVersion: '2.0.0 (Web 预览)',
         os: 'browser',
         arch: 'web',
         dataDir: '浏览器预览模式',
@@ -313,7 +313,7 @@ export const api = {
 
   chooseXhsDownloadDir: async (): Promise<string | null> => {
     if (!isTauriRuntime()) return null;
-    const selected = await open({ directory: true, multiple: false, title: '选择小红书解析下载目录' });
+    const selected = await open({ directory: true, multiple: false, title: '选择洗稿素材缓存目录' });
     return typeof selected === 'string' ? selected : null;
   },
 

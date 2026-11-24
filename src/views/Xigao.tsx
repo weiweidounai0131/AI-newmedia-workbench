@@ -3,7 +3,7 @@ import { Button, Textarea, Input, Chip, Checkbox, Modal, ModalContent, ModalHead
 import { useApp, setXigao, exportTextToLib, addXigaoTableRecord, clearXigaoTable } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
-import { ActivePill, SpringProgress } from '../motion';
+import { ActivePill, AiStreamBox, SpringProgress } from '../motion';
 import { useToastMsg } from '../lib/ui';
 import { extractHttpUrl } from '../lib/link';
 
@@ -46,6 +46,27 @@ export default function Xigao() {
   const [clock, setClock] = useState(Date.now());
   const [wordExporting, setWordExporting] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
+  const [streamDraft, setStreamDraft] = useState('');
+
+  useEffect(() => {
+    if (x.rewriteLoading) setStreamDraft('');
+  }, [x.rewriteLoading]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void api
+      .listen<{ channel: string; text: string; done: boolean }>('ai-stream', (ev) => {
+        if (ev.channel === 'xigao-rewrite') {
+          setStreamDraft(ev.text || '');
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -389,12 +410,15 @@ export default function Xigao() {
                   {isLink && x.stage === 'source' ? (
                     <div className="out-box empty">链接已解析完成。点击左侧「AI 识别内容」后，{x.mediaType === 'video' ? '将从本地视频抽取关键画面' : '将逐张读取本地图片与文案'}并由 AI 生成稿件内容。</div>
                   ) : isLink && x.stage === 'recognizing' ? (
-                    <>
-                      <div className="skeleton sk-line" style={{ width: '92%' }} />
-                      <div className="skeleton sk-line" style={{ width: '78%' }} />
-                      <div className="skeleton sk-line" style={{ width: '85%' }} />
-                      <div className="tiny" style={{ marginTop: 8 }}>{x.mediaType === 'video' ? '正在从本地视频抽取关键画面，并交给 AI 识别…' : '正在识别原稿件内容…'}</div>
-                    </>
+                    <AiStreamBox
+                      streaming
+                      content=""
+                      placeholder=""
+                      streamingLabel={x.mediaType === 'video' ? '正在抽取视频关键帧并由 AI 识别内容…' : '正在逐图识别图文内容…'}
+                      subLabel="多模态识别"
+                      lines={4}
+                      minHeight={168}
+                    />
                   ) : (x.stage === 'review' || x.stage === 'done') && x.recog ? (
                     <>
                       {x.recogMsg && <div className="info-box" role="status">{x.recogMsg}</div>}
@@ -440,9 +464,15 @@ export default function Xigao() {
                 </Button>
               </div>
               <div className="panel-body">
-                <div className={`out-box ${hasOut ? '' : 'empty'}`}>
-                  {x.out || (isLink ? '确认上方识别稿件后，AI 自动改写' : '点左侧「AI 洗稿」生成文案')}
-                </div>
+                <AiStreamBox
+                  streaming={loading}
+                  content={loading ? streamDraft : x.out}
+                  placeholder={isLink ? '确认上方识别稿件后，AI 自动改写' : '点左侧「AI 洗稿」生成文案'}
+                  streamingLabel={streamDraft ? 'AI 正在流式输出洗稿文案…' : 'AI 正在按要求重构表达…'}
+                  subLabel="实时生成"
+                  lines={5}
+                  minHeight={168}
+                />
                 <div className="optimize">
                   <div>
                     <div className="lab">不满意？输入修改意见，AI 即优化</div>

@@ -88,8 +88,8 @@ fn update_task(
 fn resolve_xhs_download_base() -> Result<PathBuf, String> {
     if let Ok(stored) = settings::load_stored() {
         if let Some(custom) = stored.xhs_download_dir.filter(|s| !s.trim().is_empty()) {
-            let p = PathBuf::from(custom);
-            fs::create_dir_all(&p).map_err(|e| format!("创建小红书下载目录失败：{e}"))?;
+            let p = PathBuf::from(custom).join("xhs");
+            fs::create_dir_all(&p).map_err(|e| format!("创建小红书缓存目录失败：{e}"))?;
             return Ok(p);
         }
     }

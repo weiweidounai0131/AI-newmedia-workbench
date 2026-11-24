@@ -3,6 +3,7 @@ import { Button, Textarea, Input, Chip, Checkbox, Modal, ModalContent, ModalHead
 import { useApp, setChutu, setTishici, setView, updateWorkflow } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
+import { AiStreamBox } from '../motion';
 import { useToastMsg, copyText } from '../lib/ui';
 
 export default function Tishici() {
@@ -259,6 +260,18 @@ export default function Tishici() {
                 </Button>
               </div>
             )}
+            {t.generating ? (
+              <AiStreamBox
+                streaming
+                content=""
+                placeholder=""
+                streamingLabel={t.type === 'tp' ? 'AI 正在生成并拆解图文文案与图片提示词…' : 'AI 正在构思画面构图与视觉提示词…'}
+                subLabel="提示词引擎"
+                lines={6}
+                minHeight={240}
+              />
+            ) : (
+              <>
             {t.type === 'tp' && (
               <div id="tTextWrap">
                 <div className="out-head">
@@ -298,6 +311,8 @@ export default function Tishici() {
                 />
               </div>
             ))}
+              </>
+            )}
             <div className="optimize">
               <div>
                 <div className="lab">不满意？输入修改意见</div>

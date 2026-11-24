@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 use crate::core::caps::{validate_base_url, CapId, ProviderProtocol};
 use crate::core::settings::{self, ProviderRequestSnapshot};
@@ -427,6 +428,234 @@ async fn call_text_with_snapshot(
     Ok(TextResult {
         text,
         model: snapshot.model.clone(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStreamEvent {
+    pub channel: String,
+    pub text: String,
+    pub done: bool,
+}
+
+fn extract_sse_delta(protocol: ProviderProtocol, data_str: &str) -> Option<String> {
+    let val: Value = serde_json::from_str(data_str).ok()?;
+    match protocol {
+        ProviderProtocol::OpenaiChatCompletions => val
+            .pointer("/choices/0/delta/content")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        ProviderProtocol::OpenaiResponses => {
+            if val.get("type").and_then(|v| v.as_str()) == Some("response.output_text.delta") {
+                val.get("delta")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        }
+        ProviderProtocol::AnthropicMessages => {
+            if val.get("type").and_then(|v| v.as_str()) == Some("content_block_delta") {
+                val.pointer("/delta/text")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// 真 SSE 流式文本生成：边收边推给前端展示框，若上游未开启 SSE 则自动兼容普通 JSON 响应
+pub async fn generate_text_stream(
+    app: &AppHandle,
+    channel: &str,
+    system: Option<&str>,
+    user: &str,
+    temperature: Option<f32>,
+) -> Result<TextResult, String> {
+    let snapshot = settings::resolve_request(CapId::Text, None)?;
+    let client = build_http_client_for(&snapshot.provider.base_url, 150)?;
+    let temp = temperature.unwrap_or(0.7);
+
+    let _ = app.emit(
+        "ai-stream",
+        AiStreamEvent {
+            channel: channel.to_string(),
+            text: String::new(),
+            done: false,
+        },
+    );
+
+    let mut resp = match snapshot.provider.protocol {
+        ProviderProtocol::OpenaiChatCompletions => {
+            let mut messages = Vec::new();
+            if let Some(sys) = system.filter(|s| !s.trim().is_empty()) {
+                messages.push(json!({ "role": "system", "content": sys }));
+            }
+            messages.push(json!({ "role": "user", "content": user }));
+            client
+                .post(endpoint(&snapshot.provider.base_url, "/chat/completions"))
+                .bearer_auth(&snapshot.api_key)
+                .json(&json!({
+                    "model": snapshot.model,
+                    "temperature": temp,
+                    "stream": true,
+                    "messages": messages,
+                }))
+                .send()
+                .await
+        }
+        ProviderProtocol::OpenaiResponses => {
+            let mut payload = json!({
+                "model": snapshot.model,
+                "input": user,
+                "temperature": temp,
+                "stream": true,
+            });
+            if let Some(sys) = system.filter(|s| !s.trim().is_empty()) {
+                payload["instructions"] = json!(sys);
+            }
+            client
+                .post(endpoint(&snapshot.provider.base_url, "/responses"))
+                .bearer_auth(&snapshot.api_key)
+                .json(&payload)
+                .send()
+                .await
+        }
+        ProviderProtocol::AnthropicMessages => {
+            let mut payload = json!({
+                "model": snapshot.model,
+                "max_tokens": 4096,
+                "temperature": temp,
+                "stream": true,
+                "messages": [{ "role": "user", "content": user }],
+            });
+            if let Some(sys) = system.filter(|s| !s.trim().is_empty()) {
+                payload["system"] = json!(sys);
+            }
+            client
+                .post(endpoint(&snapshot.provider.base_url, "/messages"))
+                .header("x-api-key", &snapshot.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&payload)
+                .send()
+                .await
+        }
+    }
+    .map_err(|e| format!("AI 流式请求失败，请检查网络或代理设置：{e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(
+            log_and_map_http_error(resp, Some(snapshot.cap), &snapshot.model, snapshot.provider.protocol)
+                .await,
+        );
+    }
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // 兼容非 SSE 网关直接返回 JSON
+    if content_type.contains("application/json") {
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("AI 响应解析失败：{e}"))?;
+        let text = match snapshot.provider.protocol {
+            ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
+            ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
+            ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+        };
+        if text.trim().is_empty() {
+            return Err("上游返回空内容".into());
+        }
+        let _ = app.emit(
+            "ai-stream",
+            AiStreamEvent {
+                channel: channel.to_string(),
+                text: text.clone(),
+                done: true,
+            },
+        );
+        return Ok(TextResult {
+            text,
+            model: snapshot.model,
+        });
+    }
+
+    let mut full_text = String::new();
+    let mut raw_buf = String::new();
+    let mut raw_all = String::new();
+
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("读取 AI 流式数据中断：{e}"))?
+    {
+        let piece = String::from_utf8_lossy(&chunk);
+        raw_buf.push_str(&piece);
+        if raw_all.len() < 128 * 1024 {
+            raw_all.push_str(&piece);
+        }
+
+        while let Some(pos) = raw_buf.find('\n') {
+            let line = raw_buf[..pos].trim().to_string();
+            raw_buf.drain(..=pos);
+            if let Some(data) = line.strip_prefix("data:") {
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                if let Some(delta) = extract_sse_delta(snapshot.provider.protocol, data) {
+                    full_text.push_str(&delta);
+                    let _ = app.emit(
+                        "ai-stream",
+                        AiStreamEvent {
+                            channel: channel.to_string(),
+                            text: full_text.clone(),
+                            done: false,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // 兜底：若网关未带 application/json 头但也未返回 SSE 格式，尝试整包解析 JSON
+    if full_text.trim().is_empty() {
+        if let Ok(body) = serde_json::from_str::<Value>(raw_all.trim()) {
+            full_text = match snapshot.provider.protocol {
+                ProviderProtocol::OpenaiChatCompletions => extract_chat_text(&body),
+                ProviderProtocol::OpenaiResponses => extract_responses_text(&body),
+                ProviderProtocol::AnthropicMessages => extract_anthropic_text(&body),
+            };
+        }
+    }
+
+    if full_text.trim().is_empty() {
+        return Err("上游未返回有效内容".into());
+    }
+
+    let _ = app.emit(
+        "ai-stream",
+        AiStreamEvent {
+            channel: channel.to_string(),
+            text: full_text.clone(),
+            done: true,
+        },
+    );
+
+    Ok(TextResult {
+        text: full_text,
+        model: snapshot.model,
     })
 }
 

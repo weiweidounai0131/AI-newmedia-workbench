@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
 
 use crate::core::ai_proxy::{self, ChutuProvidersStatus, ImageResult, VisionPart};
 use crate::core::caps::CapId;
@@ -90,7 +91,7 @@ pub struct TextOutResp {
 }
 
 #[tauri::command]
-pub async fn creative_generate(req: CreativeGenerateReq) -> Result<TextOutResp, String> {
+pub async fn creative_generate(app: AppHandle, req: CreativeGenerateReq) -> Result<TextOutResp, String> {
     if req.link.trim().is_empty()
         || req.integration.trim().is_empty()
         || req.direction.trim().is_empty()
@@ -109,7 +110,7 @@ pub async fn creative_generate(req: CreativeGenerateReq) -> Result<TextOutResp, 
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("生成一版完整、可直接使用的新媒体传播文案。")
     );
-    let r = ai_proxy::generate_text(Some(system), &user, None).await?;
+    let r = ai_proxy::generate_text_stream(&app, "creative-out", Some(system), &user, None).await?;
     Ok(TextOutResp {
         out: r.text,
         model: r.model,
@@ -124,7 +125,7 @@ pub struct CreativeOptimizeReq {
 }
 
 #[tauri::command]
-pub async fn creative_optimize(req: CreativeOptimizeReq) -> Result<TextOutResp, String> {
+pub async fn creative_optimize(app: AppHandle, req: CreativeOptimizeReq) -> Result<TextOutResp, String> {
     if req.content.trim().is_empty() || req.hint.trim().is_empty() {
         return Err("创意内容和优化意见不能为空".into());
     }
@@ -134,7 +135,7 @@ pub async fn creative_optimize(req: CreativeOptimizeReq) -> Result<TextOutResp, 
         req.content.trim(),
         req.hint.trim()
     );
-    let r = ai_proxy::generate_text(Some(system), &user, None).await?;
+    let r = ai_proxy::generate_text_stream(&app, "creative-out", Some(system), &user, None).await?;
     Ok(TextOutResp {
         out: r.text,
         model: r.model,
@@ -301,7 +302,7 @@ pub struct XigaoRewriteReq {
 }
 
 #[tauri::command]
-pub async fn xigao_rewrite(req: XigaoRewriteReq) -> Result<TextOutResp, String> {
+pub async fn xigao_rewrite(app: AppHandle, req: XigaoRewriteReq) -> Result<TextOutResp, String> {
     if req.source.trim().is_empty() {
         return Err("待改写稿件不能为空".into());
     }
@@ -314,7 +315,7 @@ pub async fn xigao_rewrite(req: XigaoRewriteReq) -> Result<TextOutResp, String> 
         parts.push(format!("优化方向：{}", h.trim()));
     }
     let system = "你是资深新媒体编辑，负责把素材改写成符合平台调性的原创文案，保留核心信息、去水印话术、自然口语化。";
-    let r = ai_proxy::generate_text(Some(system), &parts.join("\n\n"), None).await?;
+    let r = ai_proxy::generate_text_stream(&app, "xigao-rewrite", Some(system), &parts.join("\n\n"), None).await?;
     Ok(TextOutResp {
         out: r.text,
         model: r.model,

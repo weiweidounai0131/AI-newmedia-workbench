@@ -194,4 +194,84 @@ export function InteractiveCard({
   );
 }
 
+/**
+ * 全站统一的 AI 流式思考与生成动效展示框（洗稿、创意、提示词、出图统一使用）：
+ * - 等待首字阶段：流光扫描条 + 动态脉冲提示 + 呼吸波纹骨架；
+ * - 实时流式吐字阶段：活跃光晕边框 + 逐字输出 + 呼吸蓝色光标；
+ * - 完成/空态：与原 `.out-box` 风格完全一致，平滑过渡。
+ */
+export function AiStreamBox({
+  streaming,
+  content,
+  placeholder,
+  streamingLabel = 'AI 正在思考并流式生成中…',
+  subLabel,
+  lines = 4,
+  minHeight = 148,
+  className = '',
+}: {
+  streaming: boolean;
+  content: string;
+  placeholder: string;
+  streamingLabel?: string;
+  subLabel?: string;
+  lines?: number;
+  minHeight?: number;
+  className?: string;
+}) {
+  const hasContent = Boolean(content && content.trim().length > 0);
+  const widths = ['92%', '84%', '96%', '70%', '88%', '60%'];
+
+  if (streaming) {
+    return (
+      <m.div
+        className={`out-box ai-stream-box is-streaming ${className}`}
+        style={{ minHeight }}
+        initial={{ opacity: 0.85 }}
+        animate={{ opacity: 1, transition: { duration: 0.18, ease: MOTION_EASE.outExpo } }}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="ai-stream-bar" aria-hidden="true" />
+        <div className="ai-stream-head">
+          <span className="ai-stream-pulse" aria-hidden="true" />
+          <span className="ai-stream-label">{streamingLabel}</span>
+          {subLabel && <span className="ai-stream-sub">{subLabel}</span>}
+        </div>
+        {hasContent ? (
+          <div className="ai-stream-text">
+            {content}
+            <span className="ai-stream-cursor" aria-hidden="true" />
+          </div>
+        ) : (
+          <div className="ai-stream-skeletons" aria-hidden="true">
+            {Array.from({ length: lines }, (_, i) => (
+              <div
+                key={i}
+                className="ai-stream-line"
+                style={{
+                  width: widths[i % widths.length],
+                  animationDelay: `${i * 0.12}s`,
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </m.div>
+    );
+  }
+
+  return (
+    <m.div
+      key={hasContent ? 'filled' : 'empty'}
+      className={`out-box ${hasContent ? '' : 'empty'} ${className}`}
+      style={{ minHeight }}
+      initial={hasContent ? { opacity: 0.65, y: 3 } : false}
+      animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: MOTION_EASE.outExpo } }}
+    >
+      {hasContent ? content : placeholder}
+    </m.div>
+  );
+}
+
 export { AnimatePresence, m };

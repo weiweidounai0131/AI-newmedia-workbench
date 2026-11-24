@@ -419,15 +419,15 @@ export default function Settings() {
     if (chosen) setXhsDownloadDirInput(chosen);
   }
 
-  async function saveXhsDownloadDir() {
-    const value = xhsDownloadDirInput.trim();
+  async function saveXhsDownloadDir(overrideValue?: string) {
+    const value = (overrideValue ?? xhsDownloadDirInput).trim();
     setSavingXhsDownloadDir(true);
     try {
       const result = await api.setXhsDownloadDir(value);
       await api.getSettings().then(setSettings);
-      toast(value ? `小红书洗稿解析目录已固定：${result.xhsDownloadDir}` : '已恢复使用下载服务默认目录', 'success');
+      toast(value ? `洗稿素材缓存目录已保存：${result.xhsDownloadDir}` : '已恢复使用默认本地缓存目录', 'success');
     } catch (e: any) {
-      toast(e?.message || '保存小红书解析目录失败', 'danger');
+      toast(e?.message || '保存洗稿素材缓存目录失败', 'danger');
     } finally {
       setSavingXhsDownloadDir(false);
     }
@@ -660,16 +660,16 @@ export default function Settings() {
           <div className="tiny" style={{ color: 'var(--text-3)' }}>{runtime?.message || '正在检测本机环境…'}</div>
           <div className="set-row xhs-download-dir-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div className="s-main" style={{ minWidth: 260 }}>
-              <div className="s-t">小红书洗稿解析目录</div>
-              <div className="s-d">下载后的图片和文案会保存到这里，洗稿解析也从这里读取。固定后可避免下载服务与工作台目录不一致。</div>
+              <div className="s-t">洗稿素材缓存目录</div>
+              <div className="s-d">抖音视频与小红书图文下载后的本地缓存都会保存到这里（自动按 douyin / xhs 子目录分类），洗稿识别也从该目录读取。</div>
             </div>
             <div style={{ display: 'flex', flex: '1 1 420px', minWidth: 280, gap: 8, alignItems: 'center' }}>
               <Input
                 value={xhsDownloadDirInput}
                 onValueChange={setXhsDownloadDirInput}
-                placeholder="未固定，使用下载服务默认目录"
+                placeholder="未自定义，使用默认本地缓存目录"
                 size="sm"
-                aria-label="小红书洗稿解析目录"
+                aria-label="洗稿素材缓存目录"
                 className="rootdir-input"
               />
               <Button size="sm" variant="bordered" className="topic-outline-button" onPress={() => void chooseXhsDownloadDir()}>选择</Button>
@@ -677,8 +677,8 @@ export default function Settings() {
             </div>
           </div>
           <div className="tiny" style={{ color: 'var(--text-3)', marginTop: 6 }}>
-            当前目录：<span style={{ fontFamily: 'var(--mono)' }}>{settings?.xhsDownloadDir || '下载服务默认目录'}</span>
-            {settings?.xhsDownloadDir && <Button size="sm" variant="light" onPress={() => { setXhsDownloadDirInput(''); void saveXhsDownloadDir(); }} style={{ marginLeft: 8, minWidth: 0, height: 24, padding: '0 6px' }}>恢复默认</Button>}
+            当前目录：<span style={{ fontFamily: 'var(--mono)' }}>{settings?.xhsDownloadDir || '默认本地缓存目录（downloads/douyin 与 downloads/xhs）'}</span>
+            {settings?.xhsDownloadDir && <Button size="sm" variant="light" onPress={() => { setXhsDownloadDirInput(''); void saveXhsDownloadDir(''); }} style={{ marginLeft: 8, minWidth: 0, height: 24, padding: '0 6px' }}>恢复默认</Button>}
           </div>
         </div>
       </div>
