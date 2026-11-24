@@ -194,24 +194,63 @@ fn settings_file_path() -> Result<PathBuf, String> {
         .join("settings.json"))
 }
 
-fn use_isolated_aes_only() -> bool {
-    // 自动化测试或显式指定隔离目录时，只使用目录级 AES，不污染本机钥匙串。
-    std::env::var("NEWMEDIA_RS_DATA_DIR")
+fn use_local_aes_storage() -> bool {
+    // 1. 自动化测试或显式指定隔离目录时，只使用目录级 AES，不污染本机钥匙串。
+    if std::env::var("NEWMEDIA_RS_DATA_DIR")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // 2. macOS 未经 Apple 付费公证的 ad-hoc 签名应用在每次更新/热更新后都会改变二进制哈希，
+    //    导致 macOS Keychain ACL 反复弹窗索要密码；因此在 macOS 上统一改用 0600 本地派生 AES-256-GCM 存储，
+    //    彻底告别更新后反复弹钥匙串密码，同时保持密文落盘且不进前端与日志。
+    cfg!(target_os = "macos")
 }
 
-fn derive_aes_key(dir: &Path) -> Result<[u8; 32], String> {
+#[cfg(unix)]
+fn set_owner_only_perms(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_perms(_path: &Path) {}
+
+fn read_or_create_salt(dir: &Path) -> Result<Vec<u8>, String> {
     let salt_path = dir.join(".salt");
-    let salt = if salt_path.is_file() {
-        fs::read(&salt_path).map_err(|e| format!("读取加密盐失败：{e}"))?
+    if salt_path.is_file() {
+        set_owner_only_perms(&salt_path);
+        fs::read(&salt_path).map_err(|e| format!("读取加密盐失败：{e}"))
     } else {
-        let mut s = [0u8; 16];
+        let mut s = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut s);
         fs::write(&salt_path, s).map_err(|e| format!("写入加密盐失败：{e}"))?;
-        s.to_vec()
-    };
+        set_owner_only_perms(&salt_path);
+        Ok(s.to_vec())
+    }
+}
 
+/// 稳定版密钥派生（不依赖会随终端/Finder 启动环境波动的 HOSTNAME）
+fn derive_aes_key_v2(dir: &Path) -> Result<[u8; 32], String> {
+    let salt = read_or_create_salt(dir)?;
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".into());
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let fingerprint = format!("{user}|{home}|newmedia-workbench-rs-v2");
+
+    let params = ScryptParams::new(14, 8, 1, 32).map_err(|e| e.to_string())?;
+    let mut out = [0u8; 32];
+    scrypt(fingerprint.as_bytes(), &salt, &params, &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// 兼容旧版 aes: 密文的密钥派生
+fn derive_aes_key_legacy(dir: &Path) -> Result<[u8; 32], String> {
+    let salt = read_or_create_salt(dir)?;
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "localhost".into());
@@ -227,7 +266,7 @@ fn derive_aes_key(dir: &Path) -> Result<[u8; 32], String> {
 }
 
 fn encrypt_aes(dir: &Path, plain: &str) -> Result<String, String> {
-    let key = derive_aes_key(dir)?;
+    let key = derive_aes_key_v2(dir)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -238,25 +277,35 @@ fn encrypt_aes(dir: &Path, plain: &str) -> Result<String, String> {
     let mut combined = Vec::with_capacity(12 + ciphertext.len());
     combined.extend_from_slice(&nonce_bytes);
     combined.extend_from_slice(&ciphertext);
-    Ok(format!("aes:{}", B64.encode(combined)))
+    Ok(format!("aes2:{}", B64.encode(combined)))
 }
 
-fn decrypt_aes(dir: &Path, stored: &str) -> Option<String> {
-    let b64 = stored.strip_prefix("aes:")?;
+fn decrypt_aes_with_key(key: &[u8; 32], b64: &str) -> Option<String> {
     let raw = B64.decode(b64).ok()?;
     if raw.len() <= 12 {
         return None;
     }
-    let key = derive_aes_key(dir).ok()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
     let nonce = Nonce::from_slice(&raw[..12]);
     let plain = cipher.decrypt(nonce, &raw[12..]).ok()?;
     String::from_utf8(plain).ok()
 }
 
+fn decrypt_aes(dir: &Path, stored: &str) -> Option<String> {
+    if let Some(b64) = stored.strip_prefix("aes2:") {
+        let key = derive_aes_key_v2(dir).ok()?;
+        return decrypt_aes_with_key(&key, b64);
+    }
+    if let Some(b64) = stored.strip_prefix("aes:") {
+        let key = derive_aes_key_legacy(dir).ok()?;
+        return decrypt_aes_with_key(&key, b64);
+    }
+    None
+}
+
 pub fn store_secret_key(key_id: &str, plain: &str) -> Result<String, String> {
     let dir = resolve_app_data_dir().map_err(|e| e.to_string())?;
-    let marker = if !use_isolated_aes_only() {
+    let marker = if !use_local_aes_storage() {
         if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key_id) {
             if entry.set_password(plain).is_ok() {
                 "keyring".to_string()
@@ -267,6 +316,12 @@ pub fn store_secret_key(key_id: &str, plain: &str) -> Result<String, String> {
             encrypt_aes(&dir, plain)?
         }
     } else {
+        // 若此前该 key 曾存在 macOS 钥匙串，顺手删除旧项避免残留
+        if cfg!(target_os = "macos") {
+            if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key_id) {
+                let _ = entry.delete_credential();
+            }
+        }
         encrypt_aes(&dir, plain)?
     };
     if let Ok(mut cache) = SECRET_CACHE.lock() {
@@ -303,6 +358,42 @@ pub fn load_secret_key(key_id: &str, marker: &str) -> Option<String> {
     loaded
 }
 
+/// 在 macOS 上将历史存在钥匙串（marker == "keyring"）的密钥一次性静默迁移到本地 0600 AES-256-GCM 密文存储，
+/// 彻底消除此后任意版本更新/热更新触发钥匙串密码弹窗的问题。
+fn migrate_keyring_entries_if_needed(stored: &mut StoredSettings) {
+    if !use_local_aes_storage() {
+        return;
+    }
+    let keyring_ids: Vec<String> = stored
+        .keys
+        .iter()
+        .filter(|(_, marker)| marker.as_str() == "keyring")
+        .map(|(k, _)| k.clone())
+        .collect();
+    if keyring_ids.is_empty() {
+        return;
+    }
+    let Ok(dir) = resolve_app_data_dir() else {
+        return;
+    };
+    let mut changed = false;
+    for key_id in keyring_ids {
+        if let Some(plain) = load_secret_key(&key_id, "keyring") {
+            if let Ok(new_marker) = encrypt_aes(&dir, &plain) {
+                stored.keys.insert(key_id.clone(), new_marker);
+                if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key_id) {
+                    let _ = entry.delete_credential();
+                }
+                changed = true;
+                crate::core::logger::info("settings", format!("migrated key '{key_id}' from macOS Keychain to local AES-256-GCM"));
+            }
+        }
+    }
+    if changed {
+        let _ = save_stored(stored);
+    }
+}
+
 pub fn delete_secret_key(key_id: &str, marker: Option<&str>) {
     if let Ok(mut cache) = SECRET_CACHE.lock() {
         cache.remove(&cache_key_id(key_id));
@@ -329,7 +420,9 @@ pub fn save_stored(stored: &StoredSettings) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let text = serde_json::to_string_pretty(stored).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| format!("写入设置文件失败：{e}"))
+    fs::write(&path, text).map_err(|e| format!("写入设置文件失败：{e}"))?;
+    set_owner_only_perms(&path);
+    Ok(())
 }
 
 fn all_providers(stored: &StoredSettings) -> Vec<ProviderRecord> {
@@ -645,7 +738,8 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
 
 pub fn get_summary() -> Result<SettingsSummary, String> {
     let _g = SETTINGS_LOCK.lock().unwrap();
-    let stored = load_stored()?;
+    let mut stored = load_stored()?;
+    migrate_keyring_entries_if_needed(&mut stored);
     Ok(build_summary(&stored))
 }
 
@@ -1089,5 +1183,18 @@ mod tests {
             .collect();
         assert_eq!(sudocode_rows.len(), 1, "builtin sudocode must not duplicate");
         assert!(sudocode_rows[0].verified, "per-config verified stamp must take effect");
+    }
+
+    #[test]
+    fn aes2_roundtrip_without_keychain() {
+        let tmp = std::env::temp_dir().join(format!("newmedia-aes2-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let secret = "sk-test-1234567890abcdef";
+        let enc = encrypt_aes(&tmp, secret).unwrap();
+        assert!(enc.starts_with("aes2:"));
+        assert_ne!(enc, secret);
+        let dec = decrypt_aes(&tmp, &enc).unwrap();
+        assert_eq!(dec, secret);
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

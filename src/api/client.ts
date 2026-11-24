@@ -161,7 +161,7 @@ export const api = {
     if (!isTauriRuntime()) {
       return {
         ok: true,
-        appVersion: '2.0.1 (Web 预览)',
+        appVersion: '2.0.2 (Web 预览)',
         os: 'browser',
         arch: 'web',
         dataDir: '浏览器预览模式',

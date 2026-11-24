@@ -239,16 +239,23 @@ jobs:
           export AWS_CONFIG_FILE="$aws_config_file"
           export AWS_DEFAULT_REGION="$oss_region"
 
-          # 先上传二进制更新包与完整安装包，最后上传 v2/latest.json
+          # 先上传二进制更新包与完整安装包，最后上传 v2/latest.json（带超时与重试，防跨国链路僵死）
+          upload_oss() {
+            local src="$1" dst="$2" extra="${3:-}"
+            for attempt in 1 2 3; do
+              if aws s3 cp "$src" "$dst" --endpoint-url "$oss_endpoint" --cli-connect-timeout 15 --cli-read-timeout 60 --no-progress $extra; then
+                return 0
+              fi
+              echo "OSS upload attempt $attempt failed for $dst, retrying..."
+              sleep 5
+            done
+            return 1
+          }
           for f in dist-upload/*.tar.gz dist-upload/*.dmg dist-upload/*.exe; do
             [ -f "$f" ] || continue
-            aws s3 cp "$f" "s3://$ALIYUN_OSS_BUCKET/v2/$(basename "$f")" --endpoint-url "$oss_endpoint" --no-progress
+            upload_oss "$f" "s3://$ALIYUN_OSS_BUCKET/v2/$(basename "$f")"
           done
-          aws s3 cp manifests/oss-latest.json "s3://$ALIYUN_OSS_BUCKET/v2/latest.json" \
-            --endpoint-url "$oss_endpoint" \
-            --content-type "application/json" \
-            --cache-control "no-cache, max-age=60" \
-            --no-progress
+          upload_oss manifests/oss-latest.json "s3://$ALIYUN_OSS_BUCKET/v2/latest.json" "--content-type application/json --cache-control no-cache,max-age=60"
 
       - name: Upload v2 updater assets & latest.json to Cloudflare R2
         env:

@@ -1,6 +1,6 @@
 {
   "name": "newmedia-workbench-rs",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "AI新媒体工作台（Tauri 2 + Rust 原生重构版）",
   "private": true,
   "type": "module",
