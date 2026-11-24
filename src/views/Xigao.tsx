@@ -4,7 +4,7 @@ import { useApp, setXigao, exportTextToLib, addXigaoTableRecord, clearXigaoTable
 import { api } from '../api/client';
 import { Icon } from '../icons';
 import { ActivePill, AiStreamBox, SpringProgress } from '../motion';
-import { useToastMsg } from '../lib/ui';
+import { copyText, useToastMsg } from '../lib/ui';
 import { extractHttpUrl } from '../lib/link';
 
 function platformFromLink(link: string): string {
@@ -47,6 +47,10 @@ export default function Xigao() {
   const [wordExporting, setWordExporting] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [streamDraft, setStreamDraft] = useState('');
+  const [ffmpegModalOpen, setFfmpegModalOpen] = useState(false);
+  const [ffmpegOs, setFfmpegOs] = useState<'macos' | 'windows' | 'linux'>('macos');
+  const [ffmpegChecking, setFfmpegChecking] = useState(false);
+  const [ffmpegHintError, setFfmpegHintError] = useState('');
 
   useEffect(() => {
     if (x.rewriteLoading) setStreamDraft('');
@@ -172,13 +176,29 @@ export default function Xigao() {
   }
 
   // 链接解析：抖音、小红书均由 Rust 本地原生引擎下载后再识别。
-  async function runRecognize() {
+  async function runRecognize(skipFfmpegCheck = false) {
     if (x.parseStatus === 'loading') return toast('链接仍在解析中，请等待完成后再操作', 'warning');
     const rawLink = x.link.trim();
     const link = extractHttpUrl(rawLink);
     if (!link) return toast('请粘贴平台分享文本或其中的 http(s) 链接', 'warning');
     const detectedPlatform = platformFromLink(link) || x.platform;
     if (!detectedPlatform) return toast('暂时只能解析抖音或小红书链接', 'warning');
+
+    // 抖音视频洗稿需要本机 FFmpeg 抽取关键画面帧，未安装时先弹窗引导安装，装完点击继续即可无缝恢复
+    if (detectedPlatform === '抖音' && !skipFfmpegCheck) {
+      try {
+        const ff = await api.checkFfmpeg();
+        if (!ff.installed) {
+          setFfmpegOs(ff.os === 'windows' ? 'windows' : ff.os === 'linux' ? 'linux' : 'macos');
+          setFfmpegHintError('');
+          setFfmpegModalOpen(true);
+          return;
+        }
+      } catch {
+        /* 探测异常时不阻断主流程 */
+      }
+    }
+
     // “解析链接”仅负责获取并准备来源；真正的 AI 识别由下方按钮单独触发。
     setXigao({
       link, platform: detectedPlatform, stage: 'idle', recog: '', recogMsg: '', mediaType: '', vlModel: '', sourceId: '', sourceFeedback: null,
@@ -378,7 +398,7 @@ export default function Xigao() {
                     />
                     <span className="hint">支持直接粘贴平台分享文案，系统会自动提取其中的链接；需先在「设置 → 抓取账号」登录平台。</span>
                     <div className={`link-parse-action ${parseStatus}`}>
-                      <Button size="sm" variant="bordered" color="primary" isLoading={parseStatus === 'loading' && !douyinModalOpen && !xhsModalOpen} isDisabled={!x.link.trim() || linkRemain > 0 || parseStatus === 'loading'} onPress={runRecognize}>
+                      <Button size="sm" variant="bordered" color="primary" isLoading={parseStatus === 'loading' && !douyinModalOpen && !xhsModalOpen} isDisabled={!x.link.trim() || linkRemain > 0 || parseStatus === 'loading'} onPress={() => void runRecognize()}>
                         <Icon name="spark" className="ic" size={14} /> {linkRemain > 0 ? `冷却中 · ${formatRemain(linkRemain)}` : '解析链接'}
                       </Button>
                       <span role="status">{parseStatusText}</span>
@@ -641,6 +661,119 @@ export default function Xigao() {
           </div>
         </div>
       )}
+      <Modal isOpen={ffmpegModalOpen} onOpenChange={setFfmpegModalOpen} size="md" isDismissable={!ffmpegChecking}>
+        <ModalContent>
+          {(onClose) => {
+            const installCmd =
+              ffmpegOs === 'windows'
+                ? 'winget install Gyan.FFmpeg'
+                : ffmpegOs === 'linux'
+                  ? 'sudo apt install -y ffmpeg'
+                  : 'brew install ffmpeg';
+            const stepText =
+              ffmpegOs === 'windows'
+                ? '打开系统「终端 / PowerShell」，复制执行下方命令等待安装完成即可：'
+                : '打开系统「终端（Terminal）」，复制执行下方命令等待安装完成即可：';
+            return (
+              <>
+                <ModalHeader>解析抖音视频前需先安装 FFmpeg</ModalHeader>
+                <ModalBody>
+                  <p style={{ margin: 0, lineHeight: 1.7 }}>
+                    抖音视频洗稿需要通过本机 <b>FFmpeg</b> 从下载好的视频中抽取关键画面帧，再交由 AI 识别画面与口播内容。只需安装一次，后续永久可用。
+                  </p>
+                  <div className="tiny" style={{ color: 'var(--text-3)' }}>{stepText}</div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface-2)',
+                    }}
+                  >
+                    <code style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, userSelect: 'all' }}>
+                      {installCmd}
+                    </code>
+                    <Button
+                      size="sm"
+                      variant="bordered"
+                      className="topic-outline-button"
+                      onPress={() => {
+                        copyText(installCmd);
+                        toast('安装命令已复制到剪贴板', 'success');
+                      }}
+                    >
+                      <Icon name="copy" className="ic" size={14} /> 复制命令
+                    </Button>
+                  </div>
+                  <div className="tiny" style={{ color: 'var(--text-3)', lineHeight: 1.6 }}>
+                    {ffmpegOs === 'windows' ? (
+                      <>
+                        也可前往{' '}
+                        <a className="t-link" href="https://ffmpeg.org/download.html" target="_blank" rel="noreferrer">
+                          FFmpeg 官网下载页
+                        </a>{' '}
+                        手动下载并配置环境变量。
+                      </>
+                    ) : (
+                      <>
+                        若电脑未安装 Homebrew，可先在终端安装 Homebrew 或前往{' '}
+                        <a className="t-link" href="https://ffmpeg.org/download.html" target="_blank" rel="noreferrer">
+                          FFmpeg 官网下载页
+                        </a>{' '}
+                        获取。
+                      </>
+                    )}
+                  </div>
+                  {ffmpegHintError && (
+                    <div className="source-feedback danger" role="alert">
+                      <div className="source-feedback-title">
+                        <Icon name="alert" className="ic" size={15} />
+                        <span>{ffmpegHintError}</span>
+                      </div>
+                    </div>
+                  )}
+                </ModalBody>
+                <ModalFooter>
+                  <Button variant="light" isDisabled={ffmpegChecking} onPress={onClose}>
+                    取消
+                  </Button>
+                  <Button
+                    color="primary"
+                    isLoading={ffmpegChecking}
+                    onPress={async () => {
+                      setFfmpegChecking(true);
+                      setFfmpegHintError('');
+                      try {
+                        const res = await api.checkFfmpeg();
+                        if (res.installed) {
+                          setFfmpegModalOpen(false);
+                          toast('已检测到 FFmpeg，正在继续解析抖音视频…', 'success');
+                          void runRecognize(true);
+                        } else {
+                          setFfmpegHintError(
+                            ffmpegOs === 'windows'
+                              ? '暂未检测到 FFmpeg，请确认安装命令已执行完毕；若已安装请尝试重启一次工作台后再试。'
+                              : '暂未检测到 FFmpeg，请确认终端中 brew install ffmpeg 已执行完毕后再点击重试。',
+                          );
+                        }
+                      } catch {
+                        setFfmpegHintError('检测 FFmpeg 状态失败，请重试。');
+                      } finally {
+                        setFfmpegChecking(false);
+                      }
+                    }}
+                  >
+                    我已安装，继续解析
+                  </Button>
+                </ModalFooter>
+              </>
+            );
+          }}
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

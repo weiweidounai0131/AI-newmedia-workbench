@@ -16,6 +16,12 @@ export interface LegacyInstallInfo {
   runtimeBytes: number;
 }
 
+export interface FfmpegStatus {
+  installed: boolean;
+  path: string | null;
+  os: string;
+}
+
 export interface SystemHealth {
   ok: boolean;
   appVersion: string;
@@ -155,7 +161,7 @@ export const api = {
     if (!isTauriRuntime()) {
       return {
         ok: true,
-        appVersion: '2.0.0 (Web 预览)',
+        appVersion: '2.0.1 (Web 预览)',
         os: 'browser',
         arch: 'web',
         dataDir: '浏览器预览模式',
@@ -251,9 +257,19 @@ export const api = {
       model: model || null,
     }),
 
-  // Rust 原生版零 Python 运行时：直接反映本机浏览器引擎探测状态
+  checkFfmpeg: async (): Promise<FfmpegStatus> => {
+    if (!isTauriRuntime()) {
+      return { installed: true, path: 'ffmpeg', os: 'macos' };
+    }
+    return tauriInvoke<FfmpegStatus>('check_ffmpeg_status');
+  },
+
+  // Rust 原生版零 Python 运行时：直接反映本机浏览器引擎与 FFmpeg 探测状态
   runtimeStatus: async (): Promise<RuntimeSetupResp> => {
-    const health = await api.getHealth();
+    const [health, ffmpeg] = await Promise.all([
+      api.getHealth(),
+      api.checkFfmpeg().catch((): FfmpegStatus => ({ installed: false, path: null, os: 'macos' })),
+    ]);
     return {
       packaged: isTauriRuntime(),
       ready: health.browser.found,
@@ -269,6 +285,12 @@ export const api = {
           label: '本机浏览器引擎',
           ready: health.browser.found,
           detail: health.browser.found ? `复用 ${health.browser.name}` : '未检测到 Chrome / Edge',
+        },
+        {
+          id: 'ffmpeg',
+          label: 'FFmpeg（抖音视频抽帧）',
+          ready: ffmpeg.installed,
+          detail: ffmpeg.installed ? '已就绪' : '未安装（解析抖音视频时将引导安装）',
         },
       ],
     };

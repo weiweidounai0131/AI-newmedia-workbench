@@ -43,6 +43,24 @@ pub fn get_system_health() -> Result<SystemHealth, String> {
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegStatus {
+    pub installed: bool,
+    pub path: Option<String>,
+    pub os: String,
+}
+
+#[tauri::command]
+pub fn check_ffmpeg_status() -> FfmpegStatus {
+    let path = crate::downloader::source_store::find_ffmpeg_path();
+    FfmpegStatus {
+        installed: path.is_some(),
+        path,
+        os: std::env::consts::OS.to_string(),
+    }
+}
+
 #[tauri::command]
 pub fn write_client_log(level: String, module: String, message: String) {
     let lv = match level.to_uppercase().as_str() {

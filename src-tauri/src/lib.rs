@@ -24,6 +24,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 系统健康与静默开发日志
             commands::system::get_system_health,
+            commands::system::check_ffmpeg_status,
             commands::system::write_client_log,
             commands::system::open_external_url,
             // 自动更新（阿里云 OSS + Cloudflare R2 + GitHub Releases 三源自动切换）

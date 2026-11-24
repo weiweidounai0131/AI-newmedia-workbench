@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -182,20 +182,54 @@ pub fn import_xhs_note(note_dir: &str, title: Option<String>) -> Result<SourceSn
     })
 }
 
-fn find_ffmpeg_path() -> Option<String> {
-    let mut candidates = Vec::new();
+pub fn find_ffmpeg_path() -> Option<String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     #[cfg(target_os = "macos")]
     {
-        candidates.push("/opt/homebrew/bin/ffmpeg");
-        candidates.push("/usr/local/bin/ffmpeg");
+        candidates.push(PathBuf::from("/opt/homebrew/bin/ffmpeg"));
+        candidates.push(PathBuf::from("/usr/local/bin/ffmpeg"));
+        candidates.push(PathBuf::from("/opt/local/bin/ffmpeg"));
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(".local/bin/ffmpeg"));
+        }
     }
     #[cfg(target_os = "windows")]
     {
-        candidates.push(r"C:\ffmpeg\bin\ffmpeg.exe");
+        candidates.push(PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"));
+        candidates.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"));
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(&local);
+            candidates.push(base.join(r"Microsoft\WinGet\Links\ffmpeg.exe"));
+            // 扫描 WinGet 安装包目录（无需重启刷新 PATH 即可立即发现刚装好的 Gyan.FFmpeg）
+            let pkgs = base.join(r"Microsoft\WinGet\Packages");
+            if let Ok(entries) = fs::read_dir(&pkgs) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    if name.contains("ffmpeg") {
+                        let p = entry.path();
+                        if let Ok(sub) = fs::read_dir(&p) {
+                            for s in sub.flatten() {
+                                let bin = s.path().join("bin").join("ffmpeg.exe");
+                                if bin.is_file() {
+                                    candidates.push(bin);
+                                }
+                            }
+                        }
+                        let direct = p.join("bin").join("ffmpeg.exe");
+                        if direct.is_file() {
+                            candidates.push(direct);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(r"scoop\shims\ffmpeg.exe"));
+        }
     }
     for c in candidates {
-        if Path::new(c).is_file() {
-            return Some(c.to_string());
+        if c.is_file() {
+            return Some(c.to_string_lossy().to_string());
         }
     }
     let bin = if cfg!(target_os = "windows") {
@@ -203,7 +237,13 @@ fn find_ffmpeg_path() -> Option<String> {
     } else {
         "ffmpeg"
     };
-    if std::process::Command::new(bin)
+    let mut cmd = std::process::Command::new(bin);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    if cmd
         .arg("-version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
