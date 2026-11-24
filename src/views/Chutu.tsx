@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button, Textarea, Chip, Input } from '@heroui/react';
-import { useApp, setChutu, exportImageToLib } from '../store/appStore';
+import { useApp, setChutu, setView, exportImageToLib } from '../store/appStore';
 import { api } from '../api/client';
 import { Icon } from '../icons';
 import { useToastMsg, mapSize, mapQuality } from '../lib/ui';
@@ -13,33 +13,27 @@ export default function Chutu() {
   const chutu = useApp((s) => s.chutu);
   const toast = useToastMsg();
   const [optimizeHint, setOptimizeHint] = useState('');
-  const [codexStatus, setCodexStatus] = useState<{ available: boolean; message: string; version?: string } | null>(null);
   const [usedProvider, setUsedProvider] = useState<'api' | 'codex' | null>(null);
   const [imageProviderLabel, setImageProviderLabel] = useState('AIHubMix');
   const [imageModel, setImageModel] = useState('gpt-image-2');
+  const [imageConfigured, setImageConfigured] = useState(false);
 
-  useEffect(() => {
-    api.chutuProviders()
-      .then((result) => {
-        setCodexStatus(result.codex);
-        if (!result.codex.available && chutu.provider === 'codex') setChutu({ provider: 'api' });
-      })
-      .catch(() => {
-        setCodexStatus({ available: false, message: '无法检查本机 Codex 状态' });
-        if (chutu.provider === 'codex') setChutu({ provider: 'api' });
-      });
-  // 仅在首次打开页面时检测本机订阅；避免切页后重复检测。
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // 统一以「设置 → 图片生成配置」当前勾选项为唯一事实源，无歧义
   useEffect(() => {
     api.getSettings().then((summary) => {
       const image = summary.caps.find((cap) => cap.cap === 'image');
-      if (image?.providerLabel) setImageProviderLabel(image.providerLabel);
-      if (image?.model) setImageModel(image.model);
-    }).catch(() => {
-      /* 设置页不可用时保留默认展示，不影响 Codex 订阅出图。 */
-    });
+      if (!image) return;
+      const isCodex = image.provider === 'codex-cli';
+      setImageProviderLabel(image.providerLabel || (isCodex ? 'Codex CLI' : 'AIHubMix'));
+      const activeCfg = image.configurations.find((c) => c.active);
+      setImageModel(activeCfg?.modelLabel || image.model || 'gpt-image-2');
+      setImageConfigured(Boolean(image.configured));
+      const nextProvider = isCodex ? 'codex' : 'api';
+      if (chutu.provider !== nextProvider) {
+        setChutu({ provider: nextProvider });
+      }
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -129,38 +123,19 @@ export default function Chutu() {
           </div>
           <div className="panel-body">
             <div className="field">
-              <label>出图方式</label>
-              <div className="chip-row" style={{ gap: 8 }}>
-                <Button
-                  size="sm"
-                  color={chutu.provider === 'api' ? 'primary' : 'default'}
-                  variant={chutu.provider === 'api' ? 'solid' : 'bordered'}
-                  className={chutu.provider === 'api' ? undefined : 'topic-outline-button'}
-                  isDisabled={chutu.generating}
-                  onPress={() => setChutu({
-                    provider: 'api',
-                    size: AIHUBMIX_SIZES.includes(chutu.size) ? chutu.size : '自动',
-                    b64: null,
-                    done: false,
-                  })}
-                >
-                  API（{imageProviderLabel}）
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <label style={{ margin: 0 }}>当前出图模型</label>
+                <Button size="sm" variant="light" onPress={() => setView('settings')}>
+                  去设置切换
                 </Button>
-                {codexStatus?.available && (
-                  <Button
-                    size="sm"
-                    color={chutu.provider === 'codex' ? 'primary' : 'default'}
-                    variant={chutu.provider === 'codex' ? 'solid' : 'bordered'}
-                    className={chutu.provider === 'codex' ? undefined : 'topic-outline-button'}
-                    isDisabled={chutu.generating}
-                    onPress={() => setChutu({ provider: 'codex', b64: null, done: false })}
-                  >
-                    Codex 订阅（本机）
-                  </Button>
-                )}
               </div>
-              <div className={`tiny ${chutu.provider === 'codex' && !codexStatus?.available ? 'err-text' : ''}`} style={{ marginTop: 7 }}>
-                {chutu.provider === 'codex' ? (codexStatus?.message || '正在检查本机 Codex 订阅…') : `${imageProviderLabel} · ${imageModel} · 使用设置页已保存的 Key`}
+              <div className="out-box" style={{ padding: '10px 12px', marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>
+                  {imageProviderLabel} · {imageModel}
+                </span>
+                <span className={`ai-model-status ${imageConfigured ? 'verified' : 'empty'}`}>
+                  {chutu.provider === 'codex' ? '本机已就绪' : imageConfigured ? '已配置' : '未配置密钥'}
+                </span>
               </div>
             </div>
             <div className="field">

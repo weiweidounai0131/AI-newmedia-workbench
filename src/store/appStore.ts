@@ -40,6 +40,7 @@ export interface CapabilityModelConfigSummary {
   configured: boolean;
   active: boolean;
   verified: boolean;
+  editable?: boolean;
 }
 
 export interface CapSummary {

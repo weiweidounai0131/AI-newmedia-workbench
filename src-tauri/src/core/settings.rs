@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::core::ai_proxy;
 use crate::core::caps::{
     builtin_provider_map, builtin_providers, validate_base_url, validate_key_format, CapId,
     ProviderModel, ProviderProtocol, ProviderRecord,
@@ -19,6 +20,27 @@ use crate::core::caps::{
 use crate::core::paths::resolve_app_data_dir;
 
 const KEYRING_SERVICE: &str = "com.gztelecom.newmedia.workbench.rs";
+pub const CODEX_CLI_PROVIDER_ID: &str = "codex-cli";
+pub const CODEX_CLI_MODEL_ID: &str = "codex-cli-image";
+
+fn codex_cli_provider_record() -> ProviderRecord {
+    ProviderRecord {
+        id: CODEX_CLI_PROVIDER_ID.to_string(),
+        label: "Codex CLI".to_string(),
+        portal: None,
+        key_id: CODEX_CLI_PROVIDER_ID.to_string(),
+        base_url: "local://codex-cli".to_string(),
+        protocol: ProviderProtocol::OpenaiChatCompletions,
+        models: vec![ProviderModel {
+            id: CODEX_CLI_MODEL_ID.to_string(),
+            label: Some("本机订阅（免 API Key）".to_string()),
+            capabilities: vec![CapId::Image],
+        }],
+        builtin: true,
+        revision: 1,
+        scope_cap: Some(CapId::Image),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +79,8 @@ pub struct StoredSettings {
     pub root_dir: Option<String>,
     #[serde(default)]
     pub xhs_download_dir: Option<String>,
+    #[serde(default)]
+    pub codex_cli_removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +118,7 @@ pub struct CapabilityModelConfigSummary {
     pub configured: bool,
     pub active: bool,
     pub verified: bool,
+    pub editable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -308,11 +333,17 @@ fn all_providers(stored: &StoredSettings) -> Vec<ProviderRecord> {
     for (id, rec) in &stored.provider_catalog {
         map.insert(id.clone(), rec.clone());
     }
+    let mut list: Vec<ProviderRecord> = Vec::new();
+    // 仅当本机检测到已登录的 Codex CLI 且未被用户移除时，在图片生成中提供 Codex CLI 选项
+    if ai_proxy::is_codex_cli_available_sync() && !stored.codex_cli_removed {
+        list.push(codex_cli_provider_record());
+    }
     // 保持内置顺序在前，自定义按 id 稳定排序在后
-    let mut list: Vec<ProviderRecord> = builtin_providers()
-        .into_iter()
-        .filter_map(|p| map.remove(&p.id))
-        .collect();
+    list.extend(
+        builtin_providers()
+            .into_iter()
+            .filter_map(|p| map.remove(&p.id)),
+    );
     let mut custom: Vec<ProviderRecord> = map.into_values().collect();
     custom.sort_by(|a, b| a.id.cmp(&b.id));
     list.extend(custom);
@@ -320,10 +351,26 @@ fn all_providers(stored: &StoredSettings) -> Vec<ProviderRecord> {
 }
 
 pub fn provider_by_id(stored: &StoredSettings, id: &str) -> Option<ProviderRecord> {
+    if id == CODEX_CLI_PROVIDER_ID {
+        if ai_proxy::is_codex_cli_available_sync() {
+            return Some(codex_cli_provider_record());
+        }
+        return None;
+    }
     if let Some(rec) = stored.provider_catalog.get(id) {
         return Some(rec.clone());
     }
     builtin_provider_map().remove(id)
+}
+
+pub fn is_active_image_codex_cli() -> bool {
+    let _g = SETTINGS_LOCK.lock().unwrap();
+    let Ok(stored) = load_stored() else {
+        return false;
+    };
+    stored.providers.get(&CapId::Image).map(String::as_str) == Some(CODEX_CLI_PROVIDER_ID)
+        && !stored.codex_cli_removed
+        && ai_proxy::is_codex_cli_available_sync()
 }
 
 pub fn get_key_plaintext(stored: &StoredSettings, key_id: &str) -> Option<String> {
@@ -340,16 +387,25 @@ fn is_key_configured(stored: &StoredSettings, key_id: &str) -> bool {
 }
 
 fn active_pair(stored: &StoredSettings, cap: CapId) -> (String, String) {
-    let provider_id = stored
+    let mut provider_id = stored
         .providers
         .get(&cap)
         .cloned()
         .unwrap_or_else(|| cap.default_provider_id().to_string());
-    let model = stored
+    let mut model = stored
         .suppliers
         .get(&cap)
         .cloned()
         .unwrap_or_else(|| cap.default_model().to_string());
+
+    // 若之前选了 Codex CLI 但当前机器未检测到或已被移除，自动回退到默认供应商
+    if cap == CapId::Image
+        && provider_id == CODEX_CLI_PROVIDER_ID
+        && (stored.codex_cli_removed || !ai_proxy::is_codex_cli_available_sync())
+    {
+        provider_id = cap.default_provider_id().to_string();
+        model = cap.default_model().to_string();
+    }
     (provider_id, model)
 }
 
@@ -410,7 +466,11 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
     let provider_summaries: Vec<ProviderSummary> = providers
         .iter()
         .map(|p| {
-            let key_ok = is_key_configured(stored, &p.key_id);
+            let key_ok = if p.id == CODEX_CLI_PROVIDER_ID {
+                true
+            } else {
+                is_key_configured(stored, &p.key_id)
+            };
             ProviderSummary {
                 id: p.id.clone(),
                 label: p.label.clone(),
@@ -447,18 +507,27 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
             let Some(p) = provider_map.get(&entry.provider_id) else {
                 continue;
             };
-            let configured = is_key_configured(stored, &p.key_id);
+            let is_codex = p.id == CODEX_CLI_PROVIDER_ID;
+            let configured = if is_codex {
+                true
+            } else {
+                is_key_configured(stored, &p.key_id)
+            };
             let active = entry.provider_id == active_pid && entry.model == active_model;
             let key_ver = *stored.key_versions.get(&p.key_id).unwrap_or(&0);
-            let verified = active
-                && stamp
-                    .map(|s| {
-                        s.provider_id == p.id
-                            && s.model == entry.model
-                            && s.provider_revision == p.revision
-                            && s.key_version == key_ver
-                    })
-                    .unwrap_or(false);
+            let verified = if is_codex {
+                true
+            } else {
+                active
+                    && stamp
+                        .map(|s| {
+                            s.provider_id == p.id
+                                && s.model == entry.model
+                                && s.provider_revision == p.revision
+                                && s.key_version == key_ver
+                        })
+                        .unwrap_or(false)
+            };
             let model_label = p
                 .models
                 .iter()
@@ -478,6 +547,7 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
                 configured,
                 active,
                 verified,
+                editable: !is_codex,
             });
         }
 
@@ -496,12 +566,17 @@ pub fn build_summary(stored: &StoredSettings) -> SettingsSummary {
                 if !m_list.contains(&active_model) {
                     m_list.insert(0, active_model.clone());
                 }
+                let ap_configured = if ap.id == CODEX_CLI_PROVIDER_ID {
+                    true
+                } else {
+                    is_key_configured(stored, &ap.key_id)
+                };
                 (
                     m_list,
                     labels,
                     ap.label.clone(),
                     ap.portal.clone(),
-                    is_key_configured(stored, &ap.key_id),
+                    ap_configured,
                 )
             } else {
                 (
@@ -583,6 +658,15 @@ pub fn resolve_request(cap: CapId, model_override: Option<&str>) -> Result<Provi
 pub fn set_capability(cap: CapId, provider_id: &str, model: &str) -> Result<SettingsSummary, String> {
     let _g = SETTINGS_LOCK.lock().unwrap();
     let mut stored = load_stored()?;
+    if provider_id == CODEX_CLI_PROVIDER_ID {
+        if cap != CapId::Image {
+            return Err("Codex CLI 仅支持图片生成能力".into());
+        }
+        if !ai_proxy::is_codex_cli_available_sync() {
+            return Err("未检测到已登录的本机 Codex CLI".into());
+        }
+        stored.codex_cli_removed = false;
+    }
     let provider = provider_by_id(&stored, provider_id)
         .ok_or_else(|| format!("供应商不存在：{provider_id}"))?;
     if !provider.protocol.supports_cap(cap) {
@@ -644,6 +728,9 @@ pub fn save_provider(draft: ProviderDraft) -> Result<(String, SettingsSummary), 
     } else {
         draft.id.clone().unwrap()
     };
+    if id == CODEX_CLI_PROVIDER_ID {
+        return Err("Codex CLI 为本机自动探测项，仅支持勾选或移除，不能编辑配置".into());
+    }
 
     let existing = provider_by_id(&stored, &id);
     let builtin = existing.as_ref().map(|p| p.builtin).unwrap_or(false);
@@ -741,6 +828,12 @@ pub fn delete_capability_config(
     let (active_p, active_m) = active_pair(&stored, cap);
     if active_p == provider_id && active_m == model {
         return Err("当前正在使用的模型配置不能直接删除，请先切换到其他配置".into());
+    }
+
+    if cap == CapId::Image && provider_id == CODEX_CLI_PROVIDER_ID {
+        stored.codex_cli_removed = true;
+        save_stored(&stored)?;
+        return Ok(build_summary(&stored));
     }
 
     if let Some(list) = stored.capability_configs.get_mut(&cap) {

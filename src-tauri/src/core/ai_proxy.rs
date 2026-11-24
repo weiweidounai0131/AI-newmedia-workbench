@@ -555,8 +555,29 @@ fn enriched_child_path() -> String {
     extras.join(sep)
 }
 
-/// 识别本机 Codex CLI 路径（兼容 Finder 启动时丢失终端 PATH 的 macOS 场景与 Windows 场景）
-async fn codex_cli_path() -> Option<String> {
+/// 快速同步探测本机 Codex CLI 是否存在并已登录（用于设置页配置列表展示，耗时 < 1ms）
+pub fn is_codex_cli_available_sync() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let auth_path = home.join(".codex").join("auth.json");
+    let auth_ok = std::fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .map(|v| {
+            v.get("auth_mode").and_then(|m| m.as_str()) == Some("chatgpt")
+                || v.pointer("/tokens/access_token")
+                    .and_then(|t| t.as_str())
+                    .is_some()
+        })
+        .unwrap_or(false);
+    if !auth_ok {
+        return false;
+    }
+    codex_cli_path_sync().is_some()
+}
+
+pub fn codex_cli_path_sync() -> Option<String> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(custom) = std::env::var("NEWMEDIA_CODEX_CLI") {
         let t = custom.trim();
@@ -587,7 +608,16 @@ async fn codex_cli_path() -> Option<String> {
             return Some(path.to_string_lossy().to_string());
         }
     }
+    None
+}
+
+/// 识别本机 Codex CLI 路径（兼容 Finder 启动时丢失终端 PATH 的 macOS 场景与 Windows 场景）
+async fn codex_cli_path() -> Option<String> {
+    if let Some(found) = codex_cli_path_sync() {
+        return Some(found);
+    }
     let probe = tokio::process::Command::new("codex")
+        .env("PATH", enriched_child_path())
         .arg("--version")
         .output()
         .await;
@@ -760,6 +790,13 @@ pub async fn generate_codex_image(
 }
 
 pub async fn verify_capability(cap: CapId) -> Result<String, String> {
+    if cap == CapId::Image && settings::is_active_image_codex_cli() {
+        let status = chutu_providers_status().await;
+        if status.codex.available {
+            return Ok("Codex CLI（本机订阅）".to_string());
+        }
+        return Err(status.codex.message);
+    }
     let snapshot = settings::resolve_request(cap, None)?;
     match cap {
         CapId::Image => {

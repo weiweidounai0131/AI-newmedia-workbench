@@ -43,10 +43,6 @@ pub fn run() {
             commands::library::read_library_word,
             commands::library::open_library_file,
             commands::library::read_library_image_data_url,
-            // 旧版 Electron 专属迁移工具
-            commands::migrate::inspect_legacy_migration,
-            commands::migrate::run_legacy_migration,
-            commands::migrate::cleanup_legacy_runtime,
             // Phase 3 Rust 原生 CDP 引擎（扫码登录 / 登录态 / 主动搜索 / 冷却）
             commands::scrape::scrape_status,
             commands::scrape::scrape_cooldowns,

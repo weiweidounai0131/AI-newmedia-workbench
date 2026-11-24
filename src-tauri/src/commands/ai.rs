@@ -342,8 +342,10 @@ pub async fn chutu_generate(req: ChutuReq) -> Result<ImageResult, String> {
         Some(hint) => format!("{}\n\n用户修改意见：{hint}", req.prompt.trim()),
         None => req.prompt.trim().to_string(),
     };
-    let provider = req.provider.as_deref().unwrap_or("api");
-    if provider == "codex" {
+    // 统一以「设置 → 图片生成配置」当前勾选项为唯一事实源
+    let use_codex = crate::core::settings::is_active_image_codex_cli()
+        || req.provider.as_deref() == Some("codex");
+    if use_codex {
         ai_proxy::generate_codex_image(&full_prompt, req.size.as_deref(), &req.ref_imgs).await
     } else {
         ai_proxy::generate_image(

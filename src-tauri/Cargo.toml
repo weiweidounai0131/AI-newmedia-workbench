@@ -30,20 +30,12 @@ regex = "1"
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 aes-gcm = "0.10"
-aes = "0.8"
-cbc = "0.1"
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-hmac = "0.12"
-sha1 = "0.10"
 scrypt = "0.11"
 rand = "0.8"
 rust_xlsxwriter = "0.79"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 once_cell = "1"
 url = "2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
 [profile.release]
 panic = "abort"

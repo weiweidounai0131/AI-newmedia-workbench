@@ -2,7 +2,6 @@ import { useEffect, useState, useRef } from 'react';
 import { Button, Input, Spinner, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
 import { useApp, setSettings, setView, type CapId, type CapabilityModelConfigSummary } from '../store/appStore';
 import { api, type ProviderDraftRequest, type UpdateStatus } from '../api/client';
-import { MigrationModal } from '../components/MigrationModal';
 import { Icon } from '../icons';
 import { useToastMsg } from '../lib/ui';
 import appIcon from '../assets/app-icon.png';
@@ -18,7 +17,6 @@ export default function Settings() {
   const settings = useApp((s) => s.settings);
   const toast = useToastMsg();
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
-  const [migrationOpen, setMigrationOpen] = useState(false);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [configModalCap, setConfigModalCap] = useState<CapId | null>(null);
   const [configEditorOpen, setConfigEditorOpen] = useState(false);
@@ -437,6 +435,7 @@ export default function Settings() {
   const selectedModel = selectedDraftModel();
 
   function configStatus(config: CapabilityModelConfigSummary): string {
+    if (config.editable === false || config.providerId === 'codex-cli') return '已就绪';
     if (config.active && config.verified) return '已验证';
     if (!config.configured) return '未配置';
     return config.active ? '已保存，未验证' : '已保存';
@@ -450,23 +449,6 @@ export default function Settings() {
           <b>抓取合规提醒</b>：自动抓取需平台登录态，违反抖音 / 小红书 ToS，有封号 / IP 风险。仅限自用、限频、不转卖；未配置时退化为手动贴链接。
         </div>
       </div>
-
-      <div className="panel">
-        <div className="panel-head">
-          <h3><Icon name="refresh" className="ic" size={18} /> 旧版 Electron 数据迁移</h3>
-          <div className="spacer" />
-          <Button size="sm" color="primary" variant="flat" onPress={() => setMigrationOpen(true)}>
-            打开迁移向导
-          </Button>
-        </div>
-        <div className="panel-body">
-          <div className="tiny" style={{ color: 'var(--text-2)', lineHeight: 1.65 }}>
-            一键从旧版 Electron 工作台无损迁入四能力模型配置、自定义供应商、加密 API Key（macOS Keychain / Windows DPAPI / AES）及素材库路径；迁移验收后再按需释放旧版约 876 MB Python 运行环境。
-          </div>
-        </div>
-      </div>
-
-      <MigrationModal open={migrationOpen} onClose={() => setMigrationOpen(false)} />
 
       <div className="panel">
         <div className="panel-head">
@@ -526,8 +508,8 @@ export default function Settings() {
                           </span>
                         </label>
                         <div className="capability-config-status">
-                          <span className={`ai-model-status ${configStatus(config) === '未配置' ? 'empty' : config.verified ? 'verified' : 'saved'}`}>{configStatus(config)}</span>
-                          {config.active && (
+                          <span className={`ai-model-status ${configStatus(config) === '未配置' ? 'empty' : (config.verified || config.editable === false) ? 'verified' : 'saved'}`}>{configStatus(config)}</span>
+                          {config.active && config.editable !== false && config.providerId !== 'codex-cli' && (
                             <Button
                               key={verifying[configModalCap] ? 'verifying' : 'idle'}
                               size="sm"
@@ -541,7 +523,9 @@ export default function Settings() {
                           )}
                         </div>
                         <div className="capability-config-actions">
-                          <Button size="sm" variant="light" onPress={() => startEditCapabilityConfig(configModalCap, config)}>编辑</Button>
+                          {config.editable !== false && config.providerId !== 'codex-cli' && (
+                            <Button size="sm" variant="light" onPress={() => startEditCapabilityConfig(configModalCap, config)}>编辑</Button>
+                          )}
                           <Button size="sm" variant="light" color="danger" onPress={() => void deleteCapabilityConfig(configModalCap, config)}>移除</Button>
                         </div>
                       </article>
@@ -577,7 +561,11 @@ export default function Settings() {
                             }}
                           >
                             <option value="custom">自定义第三方</option>
-                            {currentConfigOptions.map((item, index) => <option value={String(index + 1)} key={`${item.providerId}:${item.model}`}>{item.providerLabel} · {item.model}</option>)}
+                            {currentConfigOptions.map((item, index) => (
+                              item.editable === false || item.providerId === 'codex-cli'
+                                ? null
+                                : <option value={String(index + 1)} key={`${item.providerId}:${item.model}`}>{item.providerLabel} · {item.model}</option>
+                            ))}
                           </select>
                         )}
                       </label>
