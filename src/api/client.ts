@@ -157,11 +157,17 @@ export const api = {
   },
 
   openExternalUrl: async (url: string): Promise<void> => {
+    const trimmed = (url || '').trim();
+    if (!/^https?:\/\//i.test(trimmed)) return;
     if (isTauriRuntime()) {
-      await openUrl(url);
+      try {
+        await tauriInvoke('open_external_url', { url: trimmed });
+      } catch {
+        await openUrl(trimmed);
+      }
       return;
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
+    window.open(trimmed, '_blank', 'noopener,noreferrer');
   },
 
   // ---- 四能力 AI 设置与安全存储 ----

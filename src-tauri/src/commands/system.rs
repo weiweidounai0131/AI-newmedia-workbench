@@ -43,3 +43,41 @@ pub fn write_client_log(level: String, module: String, message: String) {
     };
     crate::core::logger::write_log(lv, &format!("web:{module}"), &message);
 }
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("仅支持打开 http(s) 链接".into());
+    }
+    let normalized = if trimmed.contains("xiaohongshu.com/search_result/") {
+        trimmed.replace("/search_result/", "/explore/")
+    } else {
+        trimmed.to_string()
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&normalized)
+            .spawn()
+            .map_err(|e| format!("打开系统浏览器失败：{e}"))?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &normalized])
+            .spawn()
+            .map_err(|e| format!("打开系统浏览器失败：{e}"))?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&normalized)
+            .spawn()
+            .map_err(|e| format!("打开系统浏览器失败：{e}"))?;
+        Ok(())
+    }
+}

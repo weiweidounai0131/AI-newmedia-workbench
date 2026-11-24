@@ -775,4 +775,6 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .capability-config-status .ai-model-status{white-space:nowrap;flex-shrink:0;overflow:visible}
 section[role="dialog"] header{display:flex;align-items:center;gap:8px}
 section[role="dialog"] footer{display:flex;align-items:center}
+.topic-title-link{color:var(--text);font-size:inherit;font-weight:inherit;line-height:inherit;text-decoration:none;cursor:pointer}
+.topic-title-link:hover{color:var(--accent);text-decoration:underline}
 

@@ -3,11 +3,27 @@ import ReactDOM from 'react-dom/client';
 import { HeroUIProvider, ToastProvider } from '@heroui/react';
 import { MotionRoot } from './motion';
 import { isTauriRuntime, tauriInvoke } from './api/tauriBridge';
+import { api } from './api/client';
 import App from './App';
 import './index.css';
 
-// 静默捕获前端未处理异常并写入开发者本地日志（用户界面不可见）
+// 全局外链拦截：在 Tauri 桌面容器内点击任意 http(s) 链接，一律调用电脑默认浏览器打开
 if (typeof window !== 'undefined' && isTauriRuntime()) {
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute('href')?.trim() || '';
+      if (!/^https?:\/\//i.test(href)) return;
+      event.preventDefault();
+      void api.openExternalUrl(href).catch(() => {});
+    },
+    true,
+  );
+
   window.addEventListener('error', (event) => {
     const msg = `${event.message || 'unknown error'} (${event.filename || ''}:${event.lineno || 0})`;
     void tauriInvoke('write_client_log', { level: 'ERROR', module: 'window', message: msg }).catch(() => {});

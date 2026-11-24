@@ -403,7 +403,21 @@ export default function Xuanti() {
                     orderedTopics.map((t, i) => (
                       <tr key={t.id}>
                         <td className="seq">{i + 1}</td>
-                        <td className="t-title">{t.title}</td>
+                        <td className="t-title">
+                          {t.link ? (
+                            <Link
+                              className="topic-title-link"
+                              color="foreground"
+                              href={t.link}
+                              isExternal
+                              title={`在默认浏览器打开：${t.title}`}
+                            >
+                              {t.title}
+                            </Link>
+                          ) : (
+                            t.title
+                          )}
+                        </td>
                         <td>
                           <span className={`topic-source topic-source-${t.source === '热榜' ? 'hot' : 'search'}`}>
                             {t.source}

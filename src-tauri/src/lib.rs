@@ -23,6 +23,7 @@ pub fn run() {
             // 系统健康与静默开发日志
             commands::system::get_system_health,
             commands::system::write_client_log,
+            commands::system::open_external_url,
             // 四能力 AI 设置与安全存储
             commands::settings::get_settings,
             commands::settings::set_capability,
