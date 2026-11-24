@@ -55,6 +55,8 @@ export default function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: 'idle', percent: 0 });
   const [appVersion, setAppVersion] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<{ cap: CapId; config: CapabilityModelConfigSummary } | null>(null);
+  const [deletingConfig, setDeletingConfig] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -354,17 +356,27 @@ export default function Settings() {
     }
   }
 
-  async function deleteCapabilityConfig(cap: CapId, config: CapabilityModelConfigSummary) {
-    const message = config.builtin
-      ? `从「${CAPABILITY_TITLES[cap]}」配置列表移除「${config.providerLabel} · ${config.model}」？其他类型不会改变。`
-      : `从「${CAPABILITY_TITLES[cap]}」配置列表移除「${config.providerLabel} · ${config.model}」？若它没有被其他类型使用，专属加密 Key 也会一并清除。`;
-    if (!window.confirm(message)) return;
+  function requestDeleteCapabilityConfig(cap: CapId, config: CapabilityModelConfigSummary) {
+    if (config.active) {
+      toast('当前正在使用的模型配置不能直接移除，请先切换到其他配置', 'warning');
+      return;
+    }
+    setPendingDelete({ cap, config });
+  }
+
+  async function confirmDeleteCapabilityConfig() {
+    if (!pendingDelete || deletingConfig) return;
+    const { cap, config } = pendingDelete;
+    setDeletingConfig(true);
     try {
       const result = await api.deleteCapabilityConfig(cap, config.providerId, config.model);
       setSettings(result.settings);
+      setPendingDelete(null);
       toast('已从当前类型移除该配置', 'success');
     } catch (error: any) {
       toast(error?.message || '删除失败', 'danger');
+    } finally {
+      setDeletingConfig(false);
     }
   }
 
@@ -535,7 +547,7 @@ export default function Settings() {
                           {config.editable !== false && config.providerId !== 'codex-cli' && (
                             <Button size="sm" variant="light" onPress={() => startEditCapabilityConfig(configModalCap, config)}>编辑</Button>
                           )}
-                          <Button size="sm" variant="light" color="danger" onPress={() => void deleteCapabilityConfig(configModalCap, config)}>移除</Button>
+                          <Button size="sm" variant="light" color="danger" onPress={() => requestDeleteCapabilityConfig(configModalCap, config)}>移除</Button>
                         </div>
                       </article>
                     ))}
@@ -658,12 +670,9 @@ export default function Settings() {
             {!runtime?.ready && runtime?.packaged && <Button size="sm" color="primary" isLoading={runtimeInstalling || !!runtime?.installing} onPress={installRuntime}>安装环境</Button>}
           </div>
           <div className="tiny" style={{ color: 'var(--text-3)' }}>{runtime?.message || '正在检测本机环境…'}</div>
-          <div className="set-row xhs-download-dir-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div className="s-main" style={{ minWidth: 260 }}>
-              <div className="s-t">洗稿素材缓存目录</div>
-              <div className="s-d">抖音视频与小红书图文下载后的本地缓存都会保存到这里（自动按 douyin / xhs 子目录分类），洗稿识别也从该目录读取。</div>
-            </div>
-            <div style={{ display: 'flex', flex: '1 1 420px', minWidth: 280, gap: 8, alignItems: 'center' }}>
+          <div className="set-row xhs-download-dir-row" style={{ alignItems: 'center', gap: 16, flexWrap: 'wrap', borderBottom: 'none', paddingBottom: 6 }}>
+            <div className="s-t" style={{ whiteSpace: 'nowrap', minWidth: 120 }}>洗稿素材缓存目录</div>
+            <div style={{ display: 'flex', flex: '1 1 360px', minWidth: 260, gap: 8, alignItems: 'center' }}>
               <Input
                 value={xhsDownloadDirInput}
                 onValueChange={setXhsDownloadDirInput}
@@ -676,9 +685,20 @@ export default function Settings() {
               <Button size="sm" color="primary" isLoading={savingXhsDownloadDir} onPress={() => void saveXhsDownloadDir()}>保存</Button>
             </div>
           </div>
-          <div className="tiny" style={{ color: 'var(--text-3)', marginTop: 6 }}>
-            当前目录：<span style={{ fontFamily: 'var(--mono)' }}>{settings?.xhsDownloadDir || '默认本地缓存目录（downloads/douyin 与 downloads/xhs）'}</span>
-            {settings?.xhsDownloadDir && <Button size="sm" variant="light" onPress={() => { setXhsDownloadDirInput(''); void saveXhsDownloadDir(''); }} style={{ marginLeft: 8, minWidth: 0, height: 24, padding: '0 6px' }}>恢复默认</Button>}
+          <div className="tiny" style={{ color: 'var(--text-3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 4 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              当前目录：<span style={{ fontFamily: 'var(--mono)' }}>{settings?.xhsDownloadDir || '默认本地缓存目录'}</span>
+            </span>
+            {settings?.xhsDownloadDir && (
+              <Button
+                size="sm"
+                variant="light"
+                onPress={() => { setXhsDownloadDirInput(''); void saveXhsDownloadDir(''); }}
+                style={{ flexShrink: 0, minWidth: 0, height: 26, padding: '0 8px' }}
+              >
+                恢复默认
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -938,6 +958,40 @@ export default function Settings() {
                   onPress={() => scrapeLogin(qrModal.platform)}
                 >
                   刷新二维码
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+
+      {/* 移除模型配置确认弹窗（避免 Tauri 下 window.confirm 异步返回导致未确认就先删除） */}
+      <Modal
+        isOpen={Boolean(pendingDelete)}
+        onOpenChange={(open) => {
+          if (!open && !deletingConfig) setPendingDelete(null);
+        }}
+        size="sm"
+      >
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>确认移除模型配置</ModalHeader>
+              <ModalBody>
+                {pendingDelete && (
+                  <p style={{ margin: 0, lineHeight: 1.65 }}>
+                    {pendingDelete.config.builtin
+                      ? `确定从「${CAPABILITY_TITLES[pendingDelete.cap]}」配置列表移除「${pendingDelete.config.providerLabel} · ${pendingDelete.config.modelLabel}」吗？其他能力类型的配置不会受影响。`
+                      : `确定从「${CAPABILITY_TITLES[pendingDelete.cap]}」配置列表移除「${pendingDelete.config.providerLabel} · ${pendingDelete.config.modelLabel}」吗？若该供应商不再被使用，其专属加密 Key 也会一并清除。`}
+                  </p>
+                )}
+              </ModalBody>
+              <ModalFooter>
+                <Button variant="light" isDisabled={deletingConfig} onPress={onClose}>
+                  取消
+                </Button>
+                <Button color="danger" isLoading={deletingConfig} onPress={() => void confirmDeleteCapabilityConfig()}>
+                  确认移除
                 </Button>
               </ModalFooter>
             </>

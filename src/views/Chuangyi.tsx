@@ -13,14 +13,16 @@ export default function Chuangyi() {
   const toast = useToastMsg();
   const [tab, setTab] = useState<'work' | 'table'>('work');
   const [importOpen, setImportOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [selectedTopicId, setSelectedTopicId] = useState('');
   const [optimizeHint, setOptimizeHint] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
   const [streamOut, setStreamOut] = useState('');
 
   useEffect(() => {
-    if (creative.stage === 'generating') setStreamOut('');
-  }, [creative.stage]);
+    if (creative.stage === 'generating' || optimizing) setStreamOut('');
+  }, [creative.stage, optimizing]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -37,7 +39,6 @@ export default function Chuangyi() {
       unlisten?.();
     };
   }, []);
-  const [optimizing, setOptimizing] = useState(false);
 
   const hotTopics = useMemo(() => topics.filter((topic) => topic.source === '热榜' && Boolean(topic.link)), [topics]);
   const directionsLoading = creative.stage === 'directionsLoading';
@@ -192,10 +193,10 @@ export default function Chuangyi() {
           <div className="panel-head"><h3><Icon name="pen" className="ic" size={18} /> 创意内容</h3><div className="spacer" /><Button size="sm" color="primary" isLoading={exporting} isDisabled={!hasOut || exporting} onPress={() => void exportToLibrary()}><Icon name="archive" className="ic" size={14} /> 导出到素材库</Button><Button size="sm" variant="bordered" className="topic-outline-button" isDisabled={!hasOut || exporting} onPress={() => void downloadWord()}><Icon name="file" className="ic" size={14} /> 导出 Word</Button></div>
           <div className="panel-body">
             <AiStreamBox
-              streaming={generating}
-              content={generating ? streamOut : creative.out}
+              streaming={generating || optimizing}
+              content={generating || optimizing ? streamOut : creative.out}
               placeholder="选择一个创作方向后，填写要求并点击「AI 生成」。"
-              streamingLabel={streamOut ? 'AI 正在流式生成创意内容…' : 'AI 正在根据选定方向撰写内容…'}
+              streamingLabel={streamOut ? 'AI 正在流式生成创意内容…' : optimizing ? 'AI 正在按修改意见优化创意内容…' : 'AI 正在根据选定方向撰写内容…'}
               subLabel="实时生成"
               lines={5}
               minHeight={168}
@@ -205,7 +206,7 @@ export default function Chuangyi() {
         </div>
       </div>
     </div></> : <div className="panel">
-      <div className="panel-head"><h3><Icon name="archive" className="ic" size={18} /> 创意表</h3><div className="spacer" /><Button size="sm" color="danger" isDisabled={!creativeTable.length} onPress={() => { if (window.confirm('确认清空创意表记录？本地素材库中的 Word 文件不会被删除。')) clearCreativeTable(); }}><Icon name="trash" className="ic" size={14} /> 清空</Button></div>
+      <div className="panel-head"><h3><Icon name="archive" className="ic" size={18} /> 创意表</h3><div className="spacer" /><Button size="sm" color="danger" isDisabled={!creativeTable.length} onPress={() => setClearConfirmOpen(true)}><Icon name="trash" className="ic" size={14} /> 清空</Button></div>
       <div className="panel-body" style={{ paddingTop: 0 }}>
         <div className="finder-list creative-table-list">
           <div className="finder-head creative-table-head"><span>序列</span><span>稿件标题</span><span>热点名称</span><span>热点链接</span><span>改写后的文件</span></div>
@@ -230,5 +231,22 @@ export default function Chuangyi() {
       </ModalBody>
       <ModalFooter><Button variant="light" onPress={onClose}>取消</Button><Button color="primary" isDisabled={!selectedTopicId} onPress={importTopic}>导入所选热榜</Button></ModalFooter>
     </>}</ModalContent></Modal>
+
+    <Modal isOpen={clearConfirmOpen} onOpenChange={setClearConfirmOpen} size="sm">
+      <ModalContent>
+        {(onClose) => (
+          <>
+            <ModalHeader>确认清空创意表</ModalHeader>
+            <ModalBody>
+              确认清空全部创意表记录吗？已导出到本地素材库中的 Word 文件不会被删除。
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={onClose}>取消</Button>
+              <Button color="danger" onPress={() => { clearCreativeTable(); onClose(); toast('创意表记录已清空', 'success'); }}>确认清空</Button>
+            </ModalFooter>
+          </>
+        )}
+      </ModalContent>
+    </Modal>
   </>;
 }
